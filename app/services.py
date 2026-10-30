@@ -30,8 +30,8 @@ def add_member(store, gid, member):
         raise ValidationError("member name is required")
     if member.lower() in (m.lower() for m in group["members"]):
         raise ValidationError("member already exists")
-    group["members"].append(member)
-    return group
+    # Saving goes through the store so it works for memory AND PostgreSQL
+    return store.add_member(gid, member)
 
 
 def add_contribution(store, gid, member, amount):
@@ -42,8 +42,7 @@ def add_contribution(store, gid, member, amount):
     if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
         raise ValidationError("amount must be a positive number")
     canonical = next(m for m in group["members"] if m.lower() == member.lower())
-    group["contributions"].append({"member": canonical, "amount": amount})
-    return group
+    return store.add_contribution(gid, canonical, amount)
 
 
 def summary(store, gid):

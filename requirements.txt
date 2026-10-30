@@ -1,2 +1,5 @@
-flask>=3.0
-pytest>=8.0
+# Runtime dependencies (installed in the Docker image).
+# Versions are pinned so every build installs exactly the same packages.
+flask==3.1.3
+gunicorn==26.2.0
+psycopg[binary]==3.3.6

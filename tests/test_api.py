@@ -1,11 +1,4 @@
-import pytest
-
-from app import create_app
-
-
-@pytest.fixture
-def client():
-    return create_app().test_client()
+# The "client" fixture lives in tests/conftest.py
 
 
 def setup_group(c):
@@ -60,3 +53,10 @@ def test_member_balance(client):
     r = client.get("/groups/1/members/jean/balance").get_json()
     assert r == {"member": "Jean", "balance": 300}
     assert client.get("/groups/1/members/nobody/balance").status_code == 404
+
+
+def test_list_groups(client):
+    client.post("/groups", json={"name": "Kigali Savers"})
+    client.post("/groups", json={"name": "Huye Women's Group"})
+    names = [g["name"] for g in client.get("/groups").get_json()]
+    assert names == ["Kigali Savers", "Huye Women's Group"]
