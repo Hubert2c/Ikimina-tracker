@@ -1,0 +1,64 @@
+# =============================================================================
+# Docker Compose: runs the whole stack with ONE command:
+#     docker compose up --build
+# Services:
+#   app - the Ikimina Tracker API (built from our Dockerfile)
+#   db  - PostgreSQL database where groups, members and contributions are saved
+# Values like ${POSTGRES_PASSWORD} come from a .env file (copy .env.example).
+# The ":-default" part is used when the variable is not set, so the stack
+# also starts without a .env file.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------- API ----
+  app:
+    build: .                        # build the image from ./Dockerfile
+    image: ikimina-tracker:local    # name for the built image
+    container_name: ikimina-app
+    ports:
+      - "${APP_PORT:-5000}:5000"    # host port : container port
+    environment:
+      # Tells the app to use PostgreSQL instead of in-memory storage.
+      # "db" is the service name below - Compose's network turns it into
+      # a hostname the app can reach.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ikimina}:${POSTGRES_PASSWORD:-ikimina_dev_password}@db:5432/${POSTGRES_DB:-ikimina}
+    depends_on:
+      db:
+        condition: service_healthy  # wait until Postgres accepts connections
+    networks:
+      - ikimina-net
+    restart: unless-stopped         # restart automatically if it crashes
+
+  # ----------------------------------------------------------- Database ----
+  db:
+    image: postgres:16-alpine       # specific major version, small Alpine image
+    container_name: ikimina-db
+    environment:
+      # The official Postgres image uses these to create the user and database
+      POSTGRES_USER: ${POSTGRES_USER:-ikimina}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ikimina_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ikimina}
+    volumes:
+      # Named volume: data survives `docker compose down` and container rebuilds
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Compose uses this to know when the database is ready (see depends_on)
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - ikimina-net
+    restart: unless-stopped
+    # No "ports:" on purpose - the database is reachable only from the app
+    # on the private network, not from outside.
+
+# Private network shared by app and db
+networks:
+  ikimina-net:
+    driver: bridge
+
+# Named volume where PostgreSQL keeps its files.
+# Delete all data with: docker compose down -v
+volumes:
+  pgdata:
