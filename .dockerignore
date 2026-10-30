@@ -1,0 +1,47 @@
+# Files Docker should NOT send into the build context / image.
+# Smaller context = faster builds, and secrets never end up inside the image.
+
+# Version control and CI config (not needed at runtime)
+.git
+.gitignore
+.github
+
+# Secrets and local environment files (never bake secrets into an image)
+.env
+.env.*
+!.env.example
+
+# Python caches, virtual environments, build output
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# Tests, linting and coverage (CI runs these outside the image)
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+pytest.ini
+.flake8
+requirements-dev.txt
+
+# Docs and Docker files themselves
+docs/
+README.md
+LICENSE
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Editor / OS clutter
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+*.log
