@@ -149,9 +149,8 @@ curl localhost:5000/groups/1/members/Aline/balance
 - All changes go through pull requests with review
 - Project board: see [docs/PROJECT_BOARD.md](docs/PROJECT_BOARD.md)
 
-## Team
-Individual submission: **<YOUR NAME>** (approved by instructor on <DATE>).
-A reviewer collaborator is added so branch protection's 1-approval rule can be met.
 
 ## License
 MIT, see [LICENSE](LICENSE).
+
+MUNEZERO Hubert
