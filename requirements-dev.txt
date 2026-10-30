@@ -1,0 +1,4 @@
+# Development / CI dependencies: everything the app needs, plus test and lint tools.
+-r requirements.txt
+pytest==9.2.0
+flake8==7.5.0
