@@ -31,7 +31,7 @@ without smartphones.
 - PostgreSQL 16 (persistent storage), in-memory store for tests
 - pytest (tests), flake8 (linting)
 - Docker + Docker Compose (containers), GitHub Actions (CI)
-- *Planned:* cloud deployment
+- Azure VM deployment (Terraform provisioning, Ansible configuration)
 
 ## Project Structure
 ```
@@ -43,6 +43,8 @@ app/
 tests/          # pytest tests (conftest.py runs them on both stores)
 docs/           # planning, security and board documentation
 .github/workflows/ci.yml   # CI pipeline
+terraform/                 # Azure VM and network provisioning
+ansible/                   # Docker host setup and application deployment
 Dockerfile                 # how the app image is built
 docker-compose.yml         # app + database, started together
 .dockerignore              # files kept out of the image
@@ -116,9 +118,44 @@ and on every pull request into `main`:
 | **Lint (flake8)** | Checks code style and errors | flake8 reports any problem |
 | **Test (pytest)** | Runs all tests on the in-memory store *and* a real PostgreSQL service | any test fails |
 | **Docker build** | Builds the image, starts the full compose stack, calls `/health`, writes and reads a group | the build fails or the stack doesn't work |
+| **Infrastructure validation** | Checks Terraform formatting and configuration, and Ansible playbook syntax | any validation fails |
 
 `Docker build` only runs after lint and tests pass. Branch protection on `main`
-requires all three checks, so a pull request cannot be merged while CI is red.
+requires all four checks, so a pull request cannot be merged while CI is red.
+
+### Azure VM deployment
+Terraform provisions an Ubuntu 24.04 VM, static public IP, virtual network,
+and network security rules. SSH is restricted to the administrator CIDR you
+provide; the API port (5000 by default) is public. Provisioning and application
+deployment are separate steps:
+
+1. Install Terraform, Azure CLI, Ansible, and Docker locally; sign in using
+   `az login`, select the intended Azure subscription, and set
+   `ARM_SUBSCRIPTION_ID` to its ID (`az account show --query id -o tsv`).
+2. In `terraform/`, create a local `terraform.tfvars` with `location`,
+   `ssh_public_key`, and `admin_cidr` (your public IP as `/32`), for example:
+   `location = "westeurope"`, `ssh_public_key = "ssh-ed25519 AAAA..."`, and
+   `admin_cidr = "198.51.100.10/32"`. This file is ignored by Git. Run
+   `terraform init`, `terraform plan`, and
+   `terraform apply`. Azure resources incur charges; review the plan first.
+3. Copy `ansible/inventory/hosts.ini.example` to
+   `ansible/inventory/hosts.ini`, replace its example IP with the Terraform
+   `public_ip` output, and set the correct SSH key path. Copy
+   `ansible/group_vars/all.yml.example` to `ansible/group_vars/all.yml` and
+   set `ssh_admin_cidr` to your public IP in `/32` notation.
+4. Create the directory `ansible/group_vars/all/` and create
+   `ansible/group_vars/all/vault.yml` with
+   `vault_postgres_password: "<a unique password of at least 32 characters>"`
+   then encrypt it with `ansible-vault encrypt ansible/group_vars/all/vault.yml`.
+   The file is ignored by Git.
+5. From the repository root, install the collection and deploy:
+   `ansible-galaxy collection install -r ansible/requirements.yml`, then
+   `ansible-playbook -i ansible/inventory/hosts.ini ansible/playbook.yml
+   --ask-vault-pass`.
+
+The VM's UFW firewall and Azure network security group both limit SSH and API
+traffic. The application is served on port 5000 without TLS; place it behind a
+TLS-terminating reverse proxy before using it with real financial records.
 
 ### Example usage
 ```bash
