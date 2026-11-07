@@ -9,17 +9,16 @@ Please **do not** open a public issue. Use GitHub's
 **Security -> Report a vulnerability** (private advisory) on this repository,
 or contact the maintainers directly. We aim to reply within 7 days.
 
-## Automated security scanning (CI)
-These scans run on every pull request into `main` and must pass before merging.
+## Automated CI checks
+These checks run on pushes to feature branches and pull requests into `main`.
+They validate application code, the Docker stack, and infrastructure syntax;
+they are not dependency or container vulnerability scans.
 
-| Scan | Tool | What it checks | Fails the pipeline when |
+| Check | Tool | What it checks | Fails the pipeline when |
 |------|------|----------------|-------------------------|
-| Dependency scan | <!-- e.g. pip-audit --> | Known CVEs in Python packages | <!-- your rule --> |
-| Container image scan | <!-- e.g. Trivy --> | OS + library CVEs inside the Docker image | <!-- e.g. HIGH/CRITICAL --> |
-| IaC scan | <!-- e.g. Checkov / tfsec --> | Insecure Terraform settings | <!-- your rule --> |
-
-<!-- Fill this table in once YOUR workflow is written, with the job names
-     exactly as they appear in the Actions tab. -->
+| Python tests and lint | pytest, flake8 | Application behavior and code style | A test or lint check fails |
+| Container validation | Docker, Docker Compose | Image build and application/database smoke test | Build or smoke test fails |
+| Infrastructure validation | Terraform, Ansible | Terraform format/configuration and Ansible playbook syntax | Validation fails |
 
 ## Security measures in place
 **Application**
@@ -44,10 +43,11 @@ These scans run on every pull request into `main` and must pass before merging.
 - `.env` and secrets excluded by `.gitignore`; only `.env.example` is committed.
 - `main` is protected: PR + 1 approval + passing CI required.
 
-**Infrastructure** <!-- fill in from your Terraform and Ansible work -->
-- <!-- e.g. security group allows only ports ... from ... -->
-- <!-- e.g. SSH: key-only login, root login disabled -->
-- <!-- e.g. host firewall (ufw) default deny incoming -->
+**Infrastructure**
+- Azure network security group restricts SSH to the configured administrator CIDR; password SSH authentication is disabled.
+- Only the configured API port and restricted SSH are allowed inbound; the VM also enables UFW with default-deny inbound policy.
+- Terraform state, variable files, Ansible inventory, and the Ansible Vault file are excluded from Git.
+- The API endpoint has no TLS by default; deploy behind a TLS-terminating reverse proxy before handling real financial records.
 
 ## Findings log
 Each finding: what was found, how, its severity, and what we did about it.
@@ -58,7 +58,7 @@ Each finding: what was found, how, its severity, and what we did about it.
 | 2 | 2026-11-07 | Manual testing | No size limits: a 1 MB group name was stored, and request bodies were unlimited (memory / storage exhaustion). | Medium | **Fixed** - names limited to 100 characters, request bodies to 16 KB. Tests: `test_rejects_long_names`, `test_rejects_huge_request_body` |
 | 3 | 2026-11-07 | Manual testing | Errors (404, 405, 500) returned Flask's HTML pages; an unexpected error could expose internal details. | Low | **Fixed** - JSON error handlers; generic 500 message. Tests: `test_errors_are_json`, `test_unexpected_error_hides_details` |
 | 4 | 2026-11-07 | Manual testing | No HTTP security headers were sent. | Low | **Fixed** - headers added to every response. Test: `test_security_headers_on_every_response` |
-| 5 | 2026-11-07 | pip-audit (local run) | Scanned `requirements-dev.txt`: **no known vulnerabilities**. | - | No action needed; re-checked on every PR by the dependency scan. |
+| 5 | 2026-11-07 | pip-audit (local run) | Scanned `requirements-dev.txt`: **no known vulnerabilities**. | - | No action needed; dependency vulnerability scanning is not currently automated in CI. |
 | 6 | | <!-- your image scan --> | <!-- paste what it reports, e.g. CVEs in the base image --> | | <!-- fixed / accepted + why --> |
 | 7 | | <!-- your IaC scan --> | <!-- e.g. "security group open to 0.0.0.0/0 on port 22" --> | | <!-- fixed / accepted + why --> |
 

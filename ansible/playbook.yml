@@ -1,0 +1,105 @@
+---
+- name: Provision Ikimina Tracker on Azure Linux VMs
+  hosts: app_servers
+  become: true
+
+  vars:
+    app_repository: "https://github.com/Hubert2c/Ikimina-tracker.git"
+    app_revision: main
+    app_directory: /opt/ikimina-tracker
+    app_port: 5000
+    postgres_user: ikimina
+    postgres_database: ikimina
+
+  tasks:
+    - name: Require a strong database password
+      ansible.builtin.assert:
+        that:
+          - vault_postgres_password is defined
+          - vault_postgres_password | length >= 32
+          - ssh_admin_cidr is defined
+        fail_msg: Set vault_postgres_password in Ansible Vault (at least 32 characters) and define ssh_admin_cidr.
+
+    - name: Install Docker, Compose, Git, and UFW
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+          - git
+          - ufw
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Start and enable Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Set default inbound firewall policy
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Set default outbound firewall policy
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Allow SSH
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        src: "{{ ssh_admin_cidr }}"
+
+    - name: Allow the API port
+      community.general.ufw:
+        rule: allow
+        port: "{{ app_port }}"
+        proto: tcp
+
+    - name: Enable the host firewall
+      community.general.ufw:
+        state: enabled
+
+    - name: Check out the application
+      ansible.builtin.git:
+        repo: "{{ app_repository }}"
+        dest: "{{ app_directory }}"
+        version: "{{ app_revision }}"
+        force: true
+
+    - name: Configure the production environment file
+      ansible.builtin.copy:
+        dest: "{{ app_directory }}/.env"
+        content: |
+          POSTGRES_USER={{ postgres_user }}
+          POSTGRES_PASSWORD={{ vault_postgres_password }}
+          POSTGRES_DB={{ postgres_database }}
+          APP_PORT={{ app_port }}
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Build and start the application stack
+      ansible.builtin.command:
+        cmd: docker compose up --build --detach
+        chdir: "{{ app_directory }}"
+      register: compose_up
+      changed_when: >-
+        'Started' in compose_up.stdout or
+        'Created' in compose_up.stdout or
+        'Recreated' in compose_up.stdout or
+        'Built' in compose_up.stdout
+
+    - name: Wait for the API health check
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/health"
+        status_code: 200
+      register: api_health
+      retries: 12
+      delay: 5
+      until: api_health.status == 200
