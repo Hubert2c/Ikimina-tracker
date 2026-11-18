@@ -169,7 +169,9 @@ curl localhost:5000/groups/1/members/Aline/balance
 ## API Reference
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check |
+| GET | `/health` | Liveness: the process is up (never touches the database) |
+| GET | `/ready` | Readiness: `200` when the database answers, `503` when it doesn't |
+| GET | `/version` | Running build (`APP_VERSION`, set by the deploy pipeline; `dev` locally) |
 | GET | `/groups` | List groups |
 | POST | `/groups` | Create group `{name}` |
 | POST | `/groups/<id>/members` | Add member `{member}` |
