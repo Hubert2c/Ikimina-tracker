@@ -1,6 +1,6 @@
 # Ikimina Tracker
 
-![CI](https://github.com/<YOUR-GITHUB-USERNAME>/ikimina-tracker/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Hubert2c/Ikimina-tracker/actions/workflows/ci.yml/badge.svg)
 
 > Simple, transparent digital record-keeping for community savings groups.
 
@@ -58,8 +58,8 @@ Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 (or Docker Engine + the Compose plugin).
 
 ```bash
-git clone <your-repo-url>
-cd ikimina-tracker
+git clone https://github.com/Hubert2c/Ikimina-tracker.git
+cd Ikimina-tracker
 cp .env.example .env            # then edit POSTGRES_PASSWORD in .env
 docker compose up --build       # builds the image and starts app + database
 ```
@@ -93,8 +93,8 @@ docker run --rm -p 5000:5000 ikimina-tracker
 ## Running Locally without Docker
 Uses in-memory storage unless you set `DATABASE_URL`.
 ```bash
-git clone <your-repo-url>
-cd ikimina-tracker
+git clone https://github.com/Hubert2c/Ikimina-tracker.git
+cd Ikimina-tracker
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements-dev.txt
@@ -185,9 +185,12 @@ curl localhost:5000/groups/1/members/Aline/balance
 - Container runs as a non-root user (uid 10001); the database has no public port
 - Dependencies pinned to exact versions for reproducible builds
 - Branch protection on `main` with required CI checks (see [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md))
-- All changes go through pull requests with review
-- Project board: see [docs/PROJECT_BOARD.md](docs/PROJECT_BOARD.md)
+- All changes go through pull requests; CI must pass before merging (solo project, so no second reviewer)
+- Project board: [GitHub Projects board](https://github.com/users/Hubert2c/projects/1) tracking the [repository issues](https://github.com/Hubert2c/Ikimina-tracker/issues?q=is%3Aissue) (original plan in [docs/PROJECT_BOARD.md](docs/PROJECT_BOARD.md))
 
+## Team
+Individual project by MUNEZERO Hubert ([@Hubert2c](https://github.com/Hubert2c)).
+Working alone was approved in writing by the instructor.
 
 ## License
 MIT, see [LICENSE](LICENSE).
