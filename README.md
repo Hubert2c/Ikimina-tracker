@@ -184,7 +184,7 @@ curl localhost:5000/groups/1/members/Aline/balance
 - Dependencies pinned to exact versions for reproducible builds
 - Branch protection on `main` with required CI checks (see [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md))
 - All changes go through pull requests; CI must pass before merging (solo project, so no second reviewer)
-- Project board: see [docs/PROJECT_BOARD.md](docs/PROJECT_BOARD.md)
+- Project board: [GitHub Projects board](https://github.com/users/Hubert2c/projects/1) tracking the [repository issues](https://github.com/Hubert2c/Ikimina-tracker/issues?q=is%3Aissue) (original plan in [docs/PROJECT_BOARD.md](docs/PROJECT_BOARD.md))
 
 ## Team
 Individual project by MUNEZERO Hubert ([@Hubert2c](https://github.com/Hubert2c)).
