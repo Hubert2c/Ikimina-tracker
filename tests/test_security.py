@@ -77,3 +77,17 @@ def test_security_headers_on_every_response(client):
     for r in (client.get("/health"), client.get("/no-such-page")):
         for name, value in SECURITY_HEADERS.items():
             assert r.headers[name] == value
+
+
+def test_ready_reports_database_outage_without_details():
+    class DownStore:
+        def ping(self):
+            raise ConnectionError("could not connect to db.internal:5432 password=secret")
+
+    c = create_app(store=DownStore()).test_client()
+    r = c.get("/ready")
+    assert r.status_code == 503
+    assert r.get_json() == {"status": "unavailable", "database": "unreachable"}
+    assert b"secret" not in r.data
+    # liveness must stay OK, so Docker doesn't restart an app that's fine
+    assert c.get("/health").status_code == 200

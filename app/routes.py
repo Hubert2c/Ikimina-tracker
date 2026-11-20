@@ -1,3 +1,5 @@
+import os
+
 from flask import Blueprint, current_app, jsonify, request
 
 from . import services
@@ -25,7 +27,30 @@ def _not_found(err):
 
 @bp.get("/health")
 def health():
+    """Liveness: the process is up and answering. Never touches the database,
+    so a database outage doesn't make Docker restart a healthy app."""
     return jsonify(status="ok")
+
+
+@bp.get("/ready")
+def ready():
+    """Readiness: the app can do real work, i.e. the database answers.
+    503 tells an operator (or a load balancer) not to send traffic yet."""
+    try:
+        _store().ping()
+    except Exception:
+        # Log the real reason on the server; send only a short status out
+        current_app.logger.exception("readiness check failed")
+        return jsonify(status="unavailable", database="unreachable"), 503
+    return jsonify(status="ready", database="ok")
+
+
+@bp.get("/version")
+def version():
+    """Which build is running. The deployment pipeline sets APP_VERSION
+    (e.g. to the git commit SHA), so after a deploy you can confirm the
+    new code is live by comparing this value with the commit on GitHub."""
+    return jsonify(version=os.environ.get("APP_VERSION", "dev"))
 
 
 @bp.get("/groups")

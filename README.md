@@ -1,181 +1,60 @@
 # Ikimina Tracker
 
-![CI](https://github.com/Hubert2c/Ikimina-tracker/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/Hubert2c/Ikimina-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/Hubert2c/Ikimina-tracker/actions/workflows/ci.yml)
+[![CD](https://github.com/Hubert2c/Ikimina-tracker/actions/workflows/cd.yml/badge.svg)](https://github.com/Hubert2c/Ikimina-tracker/actions/workflows/cd.yml)
 
 > Simple, transparent digital record-keeping for community savings groups.
 
-## Problem Statement
-Across Rwanda and much of Africa, savings groups (*ikimina*, *tontines*, *chamas*)
-track member contributions in paper notebooks. Records get lost or altered,
-disputes arise over who paid what, and members cannot easily check their own
-balance. Ikimina Tracker gives groups a simple, auditable ledger that any
-treasurer can use and that can later be reached by SMS/USSD for members
+**Live app:** _not deployed yet. After the first deploy, put the Terraform
+`app_url` output here (e.g. `http://<bastion-ip>/health`)._
+
+This README is the operations manual: what the system is, how it is built and
+deployed, and how to run, check and fix it.
+
+| Section | |
+|---|---|
+| [1. The product](#1-the-product) | Problem, users, features, API |
+| [2. Architecture](#2-architecture) | Diagram and how a request and a deploy flow |
+| [3. Git-to-production workflow](#3-git-to-production-workflow) | Branches, CI, CD |
+| [4. Run it locally](#4-run-it-locally) | Docker Compose, plain Python, tests |
+| [5. Deploy to Azure (first time)](#5-deploy-to-azure-first-time) | Terraform, GitHub setup, first deploy |
+| [6. Day-2 operations](#6-day-2-operations) | Health checks, logs, SSH, rollback, teardown |
+| [7. Security](#7-security) | Controls and scanning |
+| [8. Repository layout](#8-repository-layout) | Where everything lives |
+
+---
+
+## 1. The product
+
+### Problem
+Across Rwanda and much of Africa, savings groups (*ikimina*, *tontines*,
+*chamas*) track member contributions in paper notebooks. Records get lost or
+altered, disputes arise over who paid what, and members cannot easily check
+their own balance. Ikimina Tracker gives groups a simple, auditable ledger that
+any treasurer can use and that can later be reached by SMS/USSD for members
 without smartphones.
 
-## Target Users
+### Users
 - **Treasurers** who record contributions for their group
 - **Members** who want to verify their balance
-- Small community savings groups (10-30 people)
+- Small community savings groups (10 to 30 people)
 
-## Core Features
+### Features
 1. Create a savings group
 2. Add members to a group (duplicates rejected)
 3. Record a member's contribution (validated, positive amounts only)
 4. View per-member balances and the group total
 5. Check an individual member's balance
-6. Persistent PostgreSQL storage (when run with Docker Compose)
-7. *(Planned)* USSD / SMS access
+6. Persistent PostgreSQL storage (managed Azure Database in production)
+7. Health, readiness and version endpoints, plus JSON request logs
+8. *(Planned)* USSD / SMS access
 
-## Technology Stack
-- Python 3.12, Flask (REST API), Gunicorn (production server)
-- PostgreSQL 16 (persistent storage), in-memory store for tests
-- pytest (tests), flake8 (linting)
-- Docker + Docker Compose (containers), GitHub Actions (CI)
-- Azure VM deployment (Terraform provisioning, Ansible configuration)
-
-## Project Structure
-```
-app/
-  __init__.py   # application factory
-  routes.py     # HTTP layer only
-  services.py   # business logic and validation
-  storage.py    # data layer: in-memory store + PostgreSQL store
-tests/          # pytest tests (conftest.py runs them on both stores)
-docs/           # planning, security and board documentation
-.github/workflows/ci.yml   # CI pipeline
-terraform/                 # Azure VM and network provisioning
-ansible/                   # Docker host setup and application deployment
-Dockerfile                 # how the app image is built
-docker-compose.yml         # app + database, started together
-.dockerignore              # files kept out of the image
-run.py                     # entry point
-```
-Routes, business logic and storage are separated so each can evolve into its
-own service (e.g. a ledger service and a notification/USSD service).
-
-## Running with Docker Compose (recommended)
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-(or Docker Engine + the Compose plugin).
-
-```bash
-git clone https://github.com/Hubert2c/Ikimina-tracker.git
-cd Ikimina-tracker
-cp .env.example .env            # then edit POSTGRES_PASSWORD in .env
-docker compose up --build       # builds the image and starts app + database
-```
-The API is now at http://localhost:5000 (try `curl localhost:5000/health`).
-
-| Task | Command |
-|------|---------|
-| Start in the background | `docker compose up -d --build` |
-| See running containers and health | `docker compose ps` |
-| Follow the logs | `docker compose logs -f app` |
-| Stop (data is kept) | `docker compose down` |
-| Stop **and delete all data** | `docker compose down -v` |
-| Open a database shell | `docker compose exec db psql -U ikimina -d ikimina` |
-
-How it fits together:
-- **app** is built from the `Dockerfile` (Python 3.12-slim, runs as a non-root
-  user, served by Gunicorn) and published on port 5000.
-- **db** is PostgreSQL 16. It is only reachable from the app over the private
-  `ikimina-net` network; its files live in the `pgdata` volume, so data survives
-  restarts.
-- The app finds the database through the `DATABASE_URL` environment variable,
-  built from the values in `.env`. It waits for the database health check
-  before starting.
-
-Build and run only the app image (in-memory storage, no database):
-```bash
-docker build -t ikimina-tracker .
-docker run --rm -p 5000:5000 ikimina-tracker
-```
-
-## Running Locally without Docker
-Uses in-memory storage unless you set `DATABASE_URL`.
-```bash
-git clone https://github.com/Hubert2c/Ikimina-tracker.git
-cd Ikimina-tracker
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements-dev.txt
-python run.py                   # http://127.0.0.1:5000
-```
-
-### Lint and test
-```bash
-flake8 .                        # style and error checks
-pytest -v                       # tests on the in-memory store
-# Also test on PostgreSQL (e.g. with the compose db exposed or your own server):
-TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/ikimina_test pytest -v
-```
-
-## Continuous Integration
-`.github/workflows/ci.yml` runs on every push to any branch except `main`,
-and on every pull request into `main`:
-
-| Job | What it does | Fails when |
-|-----|--------------|-----------|
-| **Lint (flake8)** | Checks code style and errors | flake8 reports any problem |
-| **Test (pytest)** | Runs all tests on the in-memory store *and* a real PostgreSQL service | any test fails |
-| **Docker build** | Builds the image, starts the full compose stack, calls `/health`, writes and reads a group | the build fails or the stack doesn't work |
-| **Infrastructure validation** | Checks Terraform formatting and configuration, and Ansible playbook syntax | any validation fails |
-| **Security scan (dependencies)** | pip-audit checks every Python package for known CVEs | any known vulnerability |
-| **Security scan (container image)** | Trivy scans the built image's OS and Python packages | a HIGH/CRITICAL CVE with a fix |
-| **Security scan (IaC)** | Checkov scans Terraform, Ansible, the Dockerfile and workflows | any misconfiguration not documented as an accepted risk |
-
-`Docker build` only runs after lint and tests pass. Branch protection on `main`
-requires all seven checks, so a pull request cannot be merged while CI is red.
-Scan findings and how they were fixed are in [SECURITY.md](SECURITY.md).
-
-### Azure VM deployment
-Terraform provisions an Ubuntu 24.04 VM, static public IP, virtual network,
-and network security rules. SSH is restricted to the administrator CIDR you
-provide; the API port (5000 by default) is public. Provisioning and application
-deployment are separate steps. Full guides:
-[terraform/README.md](terraform/README.md) and
-[ansible/README.md](ansible/README.md).
-
-1. Install Terraform, Azure CLI, Ansible, and Docker locally; sign in using
-   `az login`, select the intended Azure subscription, and set
-   `ARM_SUBSCRIPTION_ID` to its ID (`az account show --query id -o tsv`).
-2. In `terraform/`, create a local `terraform.tfvars` with `location`,
-   `ssh_public_key`, and `admin_cidr` (your public IP as `/32`), for example:
-   `location = "westeurope"`, `ssh_public_key = "ssh-ed25519 AAAA..."`, and
-   `admin_cidr = "198.51.100.10/32"`. This file is ignored by Git. Run
-   `terraform init`, `terraform plan`, and
-   `terraform apply`. Azure resources incur charges; review the plan first.
-3. Copy `ansible/inventory/hosts.ini.example` to
-   `ansible/inventory/hosts.ini`, replace its example IP with the Terraform
-   `public_ip` output, and set the correct SSH key path. Copy
-   `ansible/group_vars/all.yml.example` to `ansible/group_vars/all.yml` and
-   set `ssh_admin_cidr` to your public IP in `/32` notation.
-4. Create the directory `ansible/group_vars/all/` and create
-   `ansible/group_vars/all/vault.yml` with
-   `vault_postgres_password: "<a unique password of at least 32 characters>"`
-   then encrypt it with `ansible-vault encrypt ansible/group_vars/all/vault.yml`.
-   The file is ignored by Git.
-5. From the repository root, install the collection and deploy:
-   `ansible-galaxy collection install -r ansible/requirements.yml`, then
-   `ansible-playbook -i ansible/inventory/hosts.ini ansible/playbook.yml
-   --ask-vault-pass`.
-
-The VM's UFW firewall and Azure network security group both limit SSH and API
-traffic. The application is served on port 5000 without TLS; place it behind a
-TLS-terminating reverse proxy before using it with real financial records.
-
-### Example usage
-```bash
-curl -X POST localhost:5000/groups -H "Content-Type: application/json" -d '{"name":"Kigali Savers"}'
-curl -X POST localhost:5000/groups/1/members -H "Content-Type: application/json" -d '{"member":"Aline"}'
-curl -X POST localhost:5000/groups/1/contributions -H "Content-Type: application/json" -d '{"member":"Aline","amount":5000}'
-curl localhost:5000/groups/1
-curl localhost:5000/groups/1/members/Aline/balance
-```
-
-## API Reference
+### API
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check |
+| GET | `/health` | Liveness: the process is up (never touches the database) |
+| GET | `/ready` | Readiness: `200` when the database answers, `503` when it doesn't |
+| GET | `/version` | Running build: the Git commit SHA in production, `dev` locally |
 | GET | `/groups` | List groups |
 | POST | `/groups` | Create group `{name}` |
 | POST | `/groups/<id>/members` | Add member `{member}` |
@@ -183,14 +62,275 @@ curl localhost:5000/groups/1/members/Aline/balance
 | GET | `/groups/<id>` | Balances and total |
 | GET | `/groups/<id>/members/<name>/balance` | One member's balance |
 
-## Security & Collaboration Practices
-- `.gitignore` excludes secrets, virtual environments, IDE files and build artifacts
-- `.dockerignore` keeps `.env`, `.git` and tests out of the image
-- Container runs as a non-root user (uid 10001); the database has no public port
-- Dependencies pinned to exact versions for reproducible builds
-- Branch protection on `main` with required CI checks (see [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md))
-- All changes go through pull requests; CI must pass before merging (solo project, so no second reviewer)
-- Project board: [GitHub Projects board](https://github.com/users/Hubert2c/projects/1) tracking the [repository issues](https://github.com/Hubert2c/Ikimina-tracker/issues?q=is%3Aissue) (original plan in [docs/PROJECT_BOARD.md](docs/PROJECT_BOARD.md))
+```bash
+URL=http://localhost:5000            # or the live app URL
+curl -X POST $URL/groups -H "Content-Type: application/json" -d '{"name":"Kigali Savers"}'
+curl -X POST $URL/groups/1/members -H "Content-Type: application/json" -d '{"member":"Aline"}'
+curl -X POST $URL/groups/1/contributions -H "Content-Type: application/json" -d '{"member":"Aline","amount":5000}'
+curl $URL/groups/1
+curl $URL/groups/1/members/Aline/balance
+```
+
+### Technology stack
+Python 3.12, Flask, Gunicorn · PostgreSQL 16 · pytest, flake8 · Docker,
+Docker Compose · GitHub Actions (CI and CD) · Terraform (Azure) · Ansible ·
+pip-audit, Trivy, Checkov · nginx
+
+---
+
+## 2. Architecture
+
+```mermaid
+flowchart LR
+    user([Treasurer / member<br/>browser or curl])
+    dev([Developer])
+
+    subgraph GH[GitHub]
+        repo[(Repository<br/>main is protected)]
+        ci[CI workflow<br/>lint, test, Docker build,<br/>IaC validate, pip-audit,<br/>Trivy, Checkov]
+        cd[CD workflow<br/>on merge to main]
+    end
+
+    subgraph AZ["Azure resource group: ikimina-rg"]
+        acr[(Azure Container<br/>Registry, private)]
+        subgraph VNET["VNet 10.20.0.0/16"]
+            subgraph PUB["Public subnet 10.20.1.0/24, NSG: 22 from admin, 80 from internet"]
+                bastion[Bastion VM<br/>nginx reverse proxy<br/>SSH jump host]
+            end
+            subgraph PRIV["Private subnet 10.20.2.0/24, NSG: 22 and 5000 from bastion only"]
+                app[App VM, no public IP<br/>Docker: ikimina-tracker<br/>container]
+            end
+            subgraph DBS["Database subnet 10.20.3.0/24, NSG: 5432 from app only"]
+                db[(Azure Database for<br/>PostgreSQL, private)]
+            end
+        end
+    end
+
+    dev -- pull request --> repo
+    repo -- every PR --> ci
+    repo -- merge --> cd
+    cd -- "step 1: run checks" --> ci
+    cd -- "step 2: push image tagged with SHA" --> acr
+    cd -- "step 3: Ansible over SSH<br/>through the bastion" --> bastion
+    bastion -. ProxyJump .-> app
+    app -- "docker pull" --> acr
+
+    user -- "HTTP :80" --> bastion
+    bastion -- "HTTP :5000" --> app
+    app -- "TLS :5432" --> db
+```
+
+**A request:** the user calls `http://<bastion-ip>/...`. nginx on the bastion
+forwards it over the private network to the container on the app VM
+(`10.20.2.10:5000`). The app reads and writes the managed PostgreSQL over TLS,
+on its private IP.
+
+**A deployment:** a merged PR triggers `cd.yml`. It runs all CI checks, builds
+the image, scans it with Trivy, and pushes it to ACR tagged with the commit SHA.
+Then it logs in to Azure (OIDC), opens SSH on the bastion for the runner's IP
+only, and runs Ansible through the bastion. Ansible pulls the new image and
+runs `docker compose up -d`, then waits for `/ready` and checks that `/version`
+equals the commit SHA. CD smoke-tests the public URL and closes the SSH rule
+again.
+
+| Component | Terraform file | Why it's there |
+|-----------|----------------|----------------|
+| VNet + 3 subnets + 3 NSGs | `terraform/network.tf` | Network segmentation: each tier only accepts traffic from the tier in front of it |
+| Bastion VM (B1s, public IP) | `terraform/compute.tf` | The only public entry point: jump host for SSH and Ansible, nginx for web traffic |
+| App VM (B1s, **no public IP**) | `terraform/compute.tf` | Runs the container; can't be reached from the internet |
+| Azure Database for PostgreSQL (B1ms) | `terraform/database.tf` | Managed backups, patching and TLS; private access only |
+| Azure Container Registry (Basic) | `terraform/registry.tf` | Private image store; admin user disabled |
+
+---
+
+## 3. Git-to-production workflow
+
+1. Branch from `main`, commit, push. **CI** runs on every push.
+2. Open a pull request. CI runs again, and `main`'s branch protection requires
+   all seven checks to pass, review conversations to be resolved, and the branch
+   to be up to date. Nobody can push to `main` directly, not even admins.
+3. Merge. **CD** (`.github/workflows/cd.yml`) deploys to production
+   automatically.
+
+### CI: `.github/workflows/ci.yml` (every push and PR)
+| Job | What it does | Fails when |
+|-----|--------------|-----------|
+| **Lint (flake8)** | Code style and errors | flake8 reports any problem |
+| **Test (pytest)** | All tests on the in-memory store *and* a real PostgreSQL | any test fails |
+| **Docker build** | Builds the image, starts the compose stack, writes and reads a group | the build or stack fails |
+| **Infrastructure validation** | `terraform fmt -check`, `terraform validate`, `ansible-playbook --syntax-check` | any validation fails |
+| **Security scan (dependencies)** | pip-audit on every Python package | any known vulnerability |
+| **Security scan (container image)** | Trivy on the built image | a **HIGH or CRITICAL** CVE with a fix |
+| **Security scan (IaC)** | Checkov on Terraform, Ansible, Dockerfile, workflows | any misconfiguration not documented as an accepted risk |
+
+### CD: `.github/workflows/cd.yml` (merge to `main` only)
+| Stage | Job | Steps |
+|-------|-----|-------|
+| 1 | **CI checks** | Calls `ci.yml`: all seven checks above |
+| 2 | **Build, scan and push image to ACR** | Azure login (OIDC) → `az acr login` → `docker build` → Trivy scan of the exact image → `docker push :<sha>` and `:latest` |
+| 3 | **Deploy to production (Ansible)** | Azure login → temporary NSG rule for the runner IP → Ansible through the bastion (registry login, pull, `docker compose up -d`, `/ready`, `/version`) → public smoke test → NSG rule removed (always) |
+
+Deploys never overlap (`concurrency: deploy-production`), and the GitHub
+`production` environment shows the history and the live URL.
+
+---
+
+## 4. Run it locally
+
+### With Docker Compose (app + PostgreSQL)
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+```bash
+git clone https://github.com/Hubert2c/Ikimina-tracker.git
+cd Ikimina-tracker
+cp .env.example .env            # then edit POSTGRES_PASSWORD in .env
+docker compose up --build       # http://localhost:5000/health
+```
+| Task | Command |
+|------|---------|
+| Start in the background | `docker compose up -d --build` |
+| Containers and health | `docker compose ps` |
+| Follow the logs | `docker compose logs -f app` |
+| Stop (data kept) | `docker compose down` |
+| Stop **and delete data** | `docker compose down -v` |
+| Database shell | `docker compose exec db psql -U ikimina -d ikimina` |
+
+Only the app image (in-memory storage):
+```bash
+docker build -t ikimina-tracker .
+docker run --rm -p 5000:5000 ikimina-tracker
+```
+
+### Plain Python
+```bash
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements-dev.txt
+python run.py                   # http://127.0.0.1:5000 (in-memory storage)
+```
+
+### Lint and test
+```bash
+flake8 .
+pytest -v
+TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/ikimina_test pytest -v   # also on PostgreSQL
+```
+
+---
+
+## 5. Deploy to Azure (first time)
+
+You need: an Azure subscription (Azure for Students works),
+[Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
+[Terraform](https://developer.hashicorp.com/terraform/install) 1.6 or newer,
+[GitHub CLI](https://cli.github.com), and an SSH key (`ssh-keygen -t ed25519`).
+It costs about **US$1.30 a day** (2× B1s VMs, PostgreSQL B1ms, ACR Basic, 1 public IP).
+
+**1. Sign in**
+```bash
+az login
+az account set --subscription "<name or id>"
+export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+gh auth login
+```
+
+**2. Provision the infrastructure.** See [terraform/README.md](terraform/README.md).
+```bash
+cp terraform/terraform.tfvars.example terraform/terraform.tfvars   # set location, admin_cidr, ssh_public_key
+terraform -chdir=terraform init
+terraform -chdir=terraform plan -out=tfplan     # review it
+terraform -chdir=terraform apply tfplan         # about 10 to 15 minutes (PostgreSQL is the slow part)
+terraform -chdir=terraform output
+```
+
+**3. Connect GitHub Actions to Azure (one time).** This creates an OIDC
+identity with Contributor on the resource group only, plus the `production`
+environment's variables and secrets.
+```bash
+bash scripts/setup-github-deploy.sh ~/.ssh/id_ed25519
+```
+
+**4. First deploy**
+```bash
+gh workflow run cd.yml --ref main    # or merge any PR
+gh run watch
+curl "$(terraform -chdir=terraform output -raw app_url)/ready"
+```
+Then put the URL at the top of this README.
+
+To run Ansible by hand instead of through CD, see
+[ansible/README.md](ansible/README.md).
+
+---
+
+## 6. Day-2 operations
+
+| I want to… | Do this |
+|------------|---------|
+| Check it's alive | `curl $APP_URL/health`: the process is up |
+| Check it can serve traffic | `curl $APP_URL/ready`: `200` = database reachable, `503` = it isn't |
+| See which build is live | `curl $APP_URL/version`: the Git commit SHA |
+| Check the proxy only | `curl $APP_URL/nginx-health` |
+| SSH to the bastion | `$(terraform -chdir=terraform output -raw ssh_bastion)` |
+| SSH to the app VM | `$(terraform -chdir=terraform output -raw ssh_app)` (jumps through the bastion) |
+| Read app logs (one JSON line per request) | on the app VM: `sudo docker logs -f ikimina-app` |
+| Container status and health | on the app VM: `sudo docker ps` (shows `healthy` / `unhealthy`) |
+| Proxy logs | on the bastion: `sudo tail -f /var/log/nginx/access.log` |
+| Redeploy the current `main` | `gh workflow run cd.yml --ref main` |
+| **Roll back** | Revert the bad commit in a PR and merge it. CD redeploys the previous code with a new SHA |
+| See deploy history | GitHub → Environments → **production** |
+| Stop all charges | `terraform -chdir=terraform destroy` |
+
+Troubleshooting:
+- **`/health` OK but `/ready` 503:** the app can't reach PostgreSQL. Check the
+  server is running in the Azure portal, and that `DATABASE_URL` (the GitHub
+  secret) still matches `terraform output -raw database_url`.
+- **502 from nginx:** the container on the app VM is down. SSH in, then run
+  `sudo docker ps -a` and `sudo docker logs ikimina-app`.
+- **CD fails at "Wait until the bastion accepts SSH":** the NSG rule hasn't
+  propagated or the VM is stopped. Re-run the job.
+
+---
+
+## 7. Security
+Full details, scan findings and accepted risks: [SECURITY.md](SECURITY.md).
+- **Network:** only the bastion is public (SSH from the admin IP, HTTP). The app
+  VM and the database have no public endpoint, and each subnet's NSG only allows
+  the tier in front of it.
+- **Hosts:** SSH keys only, no root login, fail2ban, UFW default-deny, VM
+  extensions disabled.
+- **Container:** non-root user, read-only filesystem, all Linux capabilities
+  dropped, Debian security updates installed at build.
+- **Secrets:** no passwords in Git. Azure login uses OIDC, the DB password is
+  generated by Terraform and stored as a GitHub secret, and ACR pull tokens are
+  short-lived and removed after the pull.
+- **Pipeline:** pip-audit, Trivy (fails on HIGH and CRITICAL) and Checkov run on
+  every PR and before every deploy.
+- **Repository:** protected `main`, CODEOWNERS, `.gitignore` for state, tfvars,
+  inventory and vault files.
+- **Known gap:** no TLS yet (no domain). See SECURITY.md.
+
+---
+
+## 8. Repository layout
+```
+app/                      Flask app: routes.py (HTTP), services.py (logic), storage.py (memory/PostgreSQL)
+tests/                    pytest suite (runs on both storage backends)
+Dockerfile                image build (non-root, healthcheck, Gunicorn)
+docker-compose.yml        local stack: app + PostgreSQL
+terraform/                Azure infrastructure: network, compute, database, registry
+ansible/                  playbook.yml, tasks/, templates/, inventory/, group_vars/
+scripts/                  setup-github-deploy.sh (one-time CD setup)
+.github/workflows/        ci.yml (checks), cd.yml (deploy)
+.checkov.yaml, .trivyignore   scanner configuration (skips are documented in SECURITY.md)
+docs/                     project board, branch protection, CI evidence, demo run sheet
+SECURITY.md  CHANGELOG.md  LICENSE
+```
+
+### Collaboration
+- Branch protection on `main`: [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md)
+- Project board: [GitHub Projects](https://github.com/users/Hubert2c/projects/1)
+  tracking the [issues](https://github.com/Hubert2c/Ikimina-tracker/issues?q=is%3Aissue)
+- CI failing, then fixed: [docs/CI_EVIDENCE.md](docs/CI_EVIDENCE.md)
 
 ## Team
 Individual project by MUNEZERO Hubert ([@Hubert2c](https://github.com/Hubert2c)).
@@ -198,5 +338,3 @@ Working alone was approved in writing by the instructor.
 
 ## License
 MIT, see [LICENSE](LICENSE).
-
-MUNEZERO Hubert

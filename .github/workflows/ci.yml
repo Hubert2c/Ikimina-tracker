@@ -1,6 +1,7 @@
 # =============================================================================
 # CI pipeline for Ikimina Tracker
-# Every push (except to main) and every pull request into main runs:
+# Every push (except to main) and every pull request into main runs the jobs
+# below. The CD pipeline (cd.yml) also calls this workflow before deploying.
 #   1. lint          - flake8 style/error checks       (fails on any error)
 #   2. test          - pytest, in-memory AND PostgreSQL (fails if a test fails)
 #   3. docker-build  - builds the image and smoke-tests the full compose stack
@@ -11,7 +12,6 @@
 #        - iac-scan        - Checkov: misconfigurations in Terraform,
 #                            Ansible, the Dockerfile and this workflow
 #      Findings and accepted risks are documented in SECURITY.md.
-#   4. infrastructure - Terraform and Ansible validation
 # docker-build only starts if lint and test both passed. If ANY step exits
 # with an error, the job turns red and the pull request cannot be merged
 # (branch protection requires these checks).
@@ -26,6 +26,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_call:      # lets cd.yml run all of these checks before deploying
 
 # If you push again while a run is still going, cancel the older run
 concurrency:

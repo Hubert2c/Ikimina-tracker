@@ -26,6 +26,10 @@ class GroupStore:
     def get_group(self, gid):
         return self._groups.get(gid)
 
+    def ping(self):
+        """Readiness check: memory is always available."""
+        return True
+
     def list_groups(self):
         return list(self._groups.values())
 
@@ -83,7 +87,16 @@ class PostgresStore:
         # A new short-lived connection per operation: simple and safe across
         # the several worker processes Gunicorn starts. "with" commits on
         # success and rolls back on error.
-        return self._psycopg.connect(self._url)
+        # connect_timeout: fail fast (5s) instead of hanging when the database
+        # is unreachable, so /ready answers quickly during an outage.
+        return self._psycopg.connect(self._url, connect_timeout=5)
+
+    def ping(self):
+        """Readiness check: run the cheapest possible query.
+        Raises an error if the database can't be reached."""
+        with self._connect() as conn:
+            conn.execute("SELECT 1")
+        return True
 
     def create_group(self, name):
         with self._connect() as conn:
