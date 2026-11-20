@@ -119,15 +119,21 @@ and on every pull request into `main`:
 | **Test (pytest)** | Runs all tests on the in-memory store *and* a real PostgreSQL service | any test fails |
 | **Docker build** | Builds the image, starts the full compose stack, calls `/health`, writes and reads a group | the build fails or the stack doesn't work |
 | **Infrastructure validation** | Checks Terraform formatting and configuration, and Ansible playbook syntax | any validation fails |
+| **Security scan (dependencies)** | pip-audit checks every Python package for known CVEs | any known vulnerability |
+| **Security scan (container image)** | Trivy scans the built image's OS and Python packages | a HIGH/CRITICAL CVE with a fix |
+| **Security scan (IaC)** | Checkov scans Terraform, Ansible, the Dockerfile and workflows | any misconfiguration not documented as an accepted risk |
 
 `Docker build` only runs after lint and tests pass. Branch protection on `main`
-requires all four checks, so a pull request cannot be merged while CI is red.
+requires all seven checks, so a pull request cannot be merged while CI is red.
+Scan findings and how they were fixed are in [SECURITY.md](SECURITY.md).
 
 ### Azure VM deployment
 Terraform provisions an Ubuntu 24.04 VM, static public IP, virtual network,
 and network security rules. SSH is restricted to the administrator CIDR you
 provide; the API port (5000 by default) is public. Provisioning and application
-deployment are separate steps:
+deployment are separate steps. Full guides:
+[terraform/README.md](terraform/README.md) and
+[ansible/README.md](ansible/README.md).
 
 1. Install Terraform, Azure CLI, Ansible, and Docker locally; sign in using
    `az login`, select the intended Azure subscription, and set

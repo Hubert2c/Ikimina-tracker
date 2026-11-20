@@ -19,6 +19,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# 2b. Install Debian security updates for packages in the base image.
+#     The base image tag is only rebuilt every few weeks, so it can ship with
+#     known vulnerabilities that already have a fix. The Trivy scan in CI found
+#     one (CVE-2026-85091, HIGH, in zlib1g; see SECURITY.md #6). Upgrading
+#     here picks up the fixed version. The apt lists are deleted afterwards so
+#     they don't bloat the image.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # 3. All following commands run inside /app (created automatically).
 WORKDIR /app
 
