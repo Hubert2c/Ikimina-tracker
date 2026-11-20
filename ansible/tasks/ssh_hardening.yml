@@ -1,0 +1,19 @@
+---
+# Shared by both plays. Expects ssh_allow_tcp_forwarding ("no" or "local")
+# and a "Restart SSH" handler in the calling play.
+- name: Harden the SSH server
+  ansible.builtin.template:
+    src: sshd-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-ikimina-hardening.conf
+    owner: root
+    group: root
+    mode: "0600"
+    # Checked before it is installed, so a bad setting can't lock us out.
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart SSH
+
+- name: Start and enable fail2ban (blocks repeated failed SSH logins)
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true

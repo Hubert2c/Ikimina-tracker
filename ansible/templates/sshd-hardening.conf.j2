@@ -1,0 +1,14 @@
+# Managed by Ansible (ikimina-tracker). Do not edit by hand.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+X11Forwarding no
+AllowTcpForwarding {{ ssh_allow_tcp_forwarding }}
+AllowAgentForwarding no
+MaxAuthTries 3
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2
+AllowUsers {{ ansible_user }}
