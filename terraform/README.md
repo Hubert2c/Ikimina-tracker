@@ -1,106 +1,118 @@
-# Terraform: Azure infrastructure for Ikimina Tracker
+# Terraform: Azure production environment
 
-This folder provisions everything the app needs to run on Azure. Ansible then
-configures the server (see [../ansible/README.md](../ansible/README.md)).
+This folder provisions everything Ikimina Tracker needs on Azure. Ansible then
+configures the VMs (see [../ansible/README.md](../ansible/README.md)), and the
+CD pipeline deploys to them. The architecture diagram is in the
+[main README](../README.md#2-architecture).
 
 ## What gets created
 
 | Resource | Terraform name | Purpose |
 |----------|----------------|---------|
-| Resource group | `azurerm_resource_group.main` | Holds every resource, so `terraform destroy` removes them all |
-| Virtual network `10.20.0.0/16` | `azurerm_virtual_network.main` | Private network for the VM |
-| Subnet `10.20.1.0/24` | `azurerm_subnet.main` | Where the VM's network card lives |
-| Network security group | `azurerm_network_security_group.main` | Firewall: SSH (22) **only from `admin_cidr`**, API port open; all other inbound traffic denied |
-| NSG associations | `azurerm_subnet_network_security_group_association.main`, `azurerm_network_interface_security_group_association.main` | Applies the NSG to both the subnet and the NIC |
-| Static public IP | `azurerm_public_ip.main` | Stable address for SSH and the API |
-| Network interface | `azurerm_network_interface.main` | Connects the VM to the subnet and the public IP |
-| Ubuntu 24.04 VM (`Standard_B2s`) | `azurerm_linux_virtual_machine.main` | Runs Docker and the app; SSH key login only, password login and VM extensions disabled |
+| Resource group | `azurerm_resource_group.main` | Holds everything, so `terraform destroy` removes it all |
+| **VNet** `10.20.0.0/16` | `azurerm_virtual_network.main` | Private network |
+| Public subnet `10.20.1.0/24` | `azurerm_subnet.public` | Bastion host only |
+| **Private subnet** `10.20.2.0/24` | `azurerm_subnet.private` | App VM (no public IP) |
+| Database subnet `10.20.3.0/24` | `azurerm_subnet.database` | Delegated to PostgreSQL Flexible Server |
+| **NSG** public | `azurerm_network_security_group.public` | SSH from `admin_cidr`, HTTP 80 from the internet |
+| **NSG** private | `azurerm_network_security_group.private` | SSH and the API port **from the bastion subnet only**; everything else denied |
+| **NSG** database | `azurerm_network_security_group.database` | 5432 **from the app subnet only**; everything else denied |
+| **Bastion VM** (B1s) + static public IP | `azurerm_linux_virtual_machine.bastion` | Jump host for SSH and Ansible, nginx reverse proxy for the public URL |
+| **App VM** (B1s), fixed private IP `10.20.2.10` | `azurerm_linux_virtual_machine.app` | Runs the Docker container |
+| **Azure Database for PostgreSQL** 16 (B1ms) | `azurerm_postgresql_flexible_server.main` | Managed DB: private access, TLS, 7-day backups, connection logging |
+| Private DNS zone + VNet link | `azurerm_private_dns_zone.postgres` | Resolves the DB name to its private IP |
+| App database `ikimina` | `azurerm_postgresql_flexible_server_database.app` | |
+| **Azure Container Registry** (Basic) | `azurerm_container_registry.main` | Private image registry; admin user disabled |
+| Random suffix / DB password | `random_string.suffix`, `random_password.postgres` | Globally unique names; a generated 32-character password |
 
-## Files
+Both VMs: Ubuntu 24.04, SSH key login only (passwords disabled), VM extensions
+disabled.
+
+## Files (modular layout)
 
 | File | Contents |
 |------|----------|
-| `versions.tf` | Required Terraform (>= 1.6) and `azurerm` provider (~> 4.0) versions |
-| `variables.tf` | All environment-specific inputs. Nothing about the region, IPs or keys is hardcoded |
-| `main.tf` | The resources above |
-| `outputs.tf` | IPs, resource IDs and ready-to-use SSH and URL strings |
-| `terraform.tfvars.example` | Template for your own `terraform.tfvars` (which Git ignores) |
-| `.terraform.lock.hcl` | Locks the exact provider version, so everyone gets the same build |
+| `versions.tf` | Terraform >= 1.6, `azurerm` ~> 4.0, `random` ~> 3.6 |
+| `main.tf` | Architecture overview, resource group, random suffix |
+| `network.tf` | VNet, subnets, NSGs and their bindings |
+| `compute.tf` | Bastion and app VMs, NICs, public IP |
+| `database.tf` | PostgreSQL server, database, private DNS, settings |
+| `registry.tf` | Container registry |
+| `variables.tf` | All inputs; nothing environment-specific is hardcoded |
+| `outputs.tf` | URL, IPs, names, IDs, and the (sensitive) database URL |
+| `terraform.tfvars.example` | Template for your `terraform.tfvars` (Git ignores it) |
+| `.terraform.lock.hcl` | Locks the exact provider versions for Linux, Windows and macOS |
 
 ## Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `location` | **yes** | none | Azure region, e.g. `southafricanorth` |
-| `ssh_public_key` | **yes** | none | Your OpenSSH public key (`cat ~/.ssh/id_ed25519.pub`) |
-| `admin_cidr` | **yes** | none | The only IP range allowed to SSH, e.g. your IP as `/32` |
-| `resource_group_name` | no | `ikimina-rg` | Resource group name |
-| `vm_name` | no | `ikimina-vm` | Prefix for the VM and its resources |
-| `vm_size` | no | `Standard_B2s` | Azure VM size |
-| `admin_username` | no | `ikiminaadmin` | Linux admin user |
-| `app_port` | no | `5000` | Public API port (validated to be 1 to 65535) |
-| `tags` | no | app and managed-by tags | Tags on every resource |
+Required: `location`, `admin_cidr` (your IP as `/32`, and `0.0.0.0/0` is
+rejected) and `ssh_public_key`. Everything else has a default; see
+`variables.tf`: `prefix`, `resource_group_name`, the CIDRs, `app_private_ip`,
+`app_port`, the VM sizes, `postgres_version`, `postgres_sku`, `acr_sku`, `tags`.
 
-There are no secrets in this configuration. Authentication uses your Azure CLI
-login, and the VM uses SSH keys, not passwords.
+No secrets are passed in. The database password is generated by Terraform, and
+Azure authentication uses your `az login`.
 
 ## Outputs
 
-| Output | Example use |
-|--------|-------------|
-| `public_ip` | Put into the Ansible inventory |
-| `private_ip` | Address inside the VNet |
-| `ssh_command` | Copy and paste to log in |
-| `api_url` | Health check URL after deployment |
-| `resource_group_id`, `vnet_id`, `subnet_id`, `nsg_id`, `vm_id` | Azure resource IDs for the portal, CLI or other tooling |
-
-Show them any time with `terraform output` (or `terraform output -raw public_ip`).
+| Output | Used for |
+|--------|----------|
+| `app_url` | The live app (`http://<bastion-ip>`) |
+| `bastion_public_ip`, `app_private_ip` | Ansible inventory, CD variables |
+| `ssh_bastion`, `ssh_app` | Copy-paste SSH commands (`ssh_app` jumps through the bastion) |
+| `acr_name`, `acr_login_server` | Pushing and pulling images |
+| `postgres_fqdn` | DB host (private) |
+| `database_url` | **Sensitive.** `terraform output -raw database_url` |
+| `resource_group_name`, `public_nsg_name`, `admin_username`, `app_port` | CD pipeline settings |
+| `resource_group_id`, `vnet_id`, `bastion_vm_id`, `app_vm_id`, `postgres_server_id`, `acr_id` | Azure resource IDs |
 
 ## How to use it
 
-### 1. Prerequisites
-- [Terraform](https://developer.hashicorp.com/terraform/install) 1.6 or newer
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) and an Azure subscription
-- An SSH key pair (`ssh-keygen -t ed25519` if you don't have one)
-
-### 2. Sign in to Azure
 ```bash
+# 1. Sign in
 az login
-az account set --subscription "<subscription name or id>"
+az account set --subscription "<name or id>"
 export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-```
 
-### 3. Set your values
-```bash
+# 2. Your values
+cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+#    location: a region your subscription allows (see below)
+#    admin_cidr: "$(curl -s ifconfig.me)/32"
+#    ssh_public_key: contents of ~/.ssh/id_ed25519.pub
+
+# 3. Initialise, check, plan, apply
 cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars: location, admin_cidr (curl ifconfig.me, then add /32), ssh_public_key
+terraform init
+terraform fmt -check && terraform validate
+terraform plan -out=tfplan        # review: about 25 resources to add
+terraform apply tfplan            # about 10 to 15 minutes; PostgreSQL is the slowest part
+terraform output
+
+# 4. Tear down when finished (stops all charges)
+terraform destroy
 ```
 
-### 4. Initialise, plan, apply
-```bash
-terraform init      # downloads the azurerm provider (version from .terraform.lock.hcl)
-terraform fmt -check
-terraform validate  # syntax and type check, no Azure calls
-terraform plan      # shows exactly what will be created. Review it
-terraform apply     # type "yes" to create the resources (this costs money)
-terraform output    # IPs and IDs for the next step
-```
+Next: `bash scripts/setup-github-deploy.sh` from the repo root (connects the CD
+pipeline), then the first deploy. See the [main README](../README.md#5-deploy-to-azure-first-time).
 
-Next, configure the server with Ansible: [../ansible/README.md](../ansible/README.md).
+### Azure for Students tips
+- Students can usually deploy to only a few regions. If `apply` fails with
+  `RequestDisallowedByAzure` or `LocationIsOfferRestricted`, find yours with
+  `az policy assignment list --query "[].parameters.listOfAllowedLocations.value" -o tsv`
+  and change `location`.
+- If PostgreSQL says the SKU isn't available in the region, try another allowed
+  region. All resources must share one region.
+- `Standard_B1s` not available? Set `bastion_vm_size` and `app_vm_size` to `Standard_B2ats_v2`.
 
-### 5. Tear down
-```bash
-terraform destroy   # deletes the whole resource group to stop charges
-```
+## State
 
-## Quality and security checks in CI
+State is local (`terraform/terraform.tfstate`, ignored by Git) and **contains
+the generated DB password**. Keep it private and don't delete it while the
+environment exists. For a team you would move it to an Azure Storage backend.
 
-Every pull request runs:
-- **Infrastructure validation:** `terraform fmt -check` and `terraform validate`
-- **Security scan (IaC):** Checkov. Two findings were fixed and one is an
-  accepted risk with a documented skip comment in `main.tf`. See
-  [../SECURITY.md](../SECURITY.md).
-
-State files (`*.tfstate`), `.terraform/` and `*.tfvars` are ignored by Git, so
-real IPs and keys are never committed.
+## Checks in CI
+- **Infrastructure validation:** `terraform fmt -check`, `terraform validate`
+- **Security scan (IaC):** Checkov reports 34 passed and 0 failed. 12 checks
+  are skipped, each with a reason in the code (`# checkov:skip=...`) and
+  explained in [../SECURITY.md](../SECURITY.md). Most are ACR Premium-only
+  features.
