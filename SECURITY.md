@@ -45,18 +45,48 @@ image CVEs are ignored). Every skip must be listed under *Accepted risks* below.
 - Debian security updates are installed during the image build.
 - Container runs as a non-root user (uid 10001); `.dockerignore` keeps `.env`,
   `.git` and tests out of the image.
-- Database has no public port; it is only reachable from the app container.
+- In production the container runs with a read-only filesystem, all Linux
+  capabilities dropped and `no-new-privileges`, and its port is bound to the
+  VM's private IP only.
+- Images are scanned by Trivy in CI **and again in CD**, on the exact image
+  that is pushed to the registry.
 
-**Repository**
+**Repository and pipeline**
 - `.env` and secrets excluded by `.gitignore`; only `.env.example` is committed.
 - `main` is protected: a pull request and all seven CI checks are required, branches must be up to date, review conversations must be resolved, and the rules also apply to administrators. Approvals are set to 0 because this is a solo project and GitHub doesn't allow self-approval.
+- **No long-lived cloud credentials in GitHub:** CD logs in to Azure with
+  OpenID Connect. The federated credential only trusts this repository's
+  `production` environment, and the identity is Contributor on the Ikimina
+  resource group only.
+- Secrets (`SSH_PRIVATE_KEY`, `DATABASE_URL`) are GitHub **environment**
+  secrets, available only to jobs in the `production` environment. The deploy
+  writes them to a 0600 file and deletes it afterwards (`if: always()`).
+- The ACR pull token is short-lived (about 3 hours), masked in logs, and
+  removed from the VM (`docker logout`) right after the pull.
 
-**Infrastructure**
-- Azure network security group restricts SSH to the configured administrator CIDR and is attached to both the subnet and the VM's network interface; password SSH authentication and VM extensions are disabled.
-- Ansible hardens SSH (no root login, keys only, `MaxAuthTries 3`, no forwarding, `AllowUsers` the admin only; validated with `sshd -t`) and installs fail2ban.
-- Only the configured API port and restricted SSH are allowed inbound; the VM also enables UFW with default-deny inbound policy.
-- Terraform state, variable files, Ansible inventory, and the Ansible Vault file are excluded from Git.
-- The API endpoint has no TLS by default; deploy behind a TLS-terminating reverse proxy before handling real financial records.
+**Infrastructure (Azure)**
+- **Network segmentation:** three subnets with an NSG each. Public: SSH only
+  from `admin_cidr`, HTTP 80 from the internet. Private: SSH and 5000 only from
+  the bastion subnet, everything else denied. Database: 5432 only from the app
+  subnet, everything else denied.
+- **No public IP on the app VM or the database.** The bastion is the single
+  entry point.
+- SSH to the bastion is opened for the CD runner's IP **only during a deploy**
+  (a temporary NSG rule that is always removed, even if the deploy fails).
+- **Managed PostgreSQL:** private access through VNet integration, public
+  network access disabled, TLS required (`sslmode=require`), 7-day backups,
+  connection and disconnection logging. Its 32-character password is generated
+  by Terraform and never typed or committed.
+- **Container registry:** admin user disabled; only Entra ID identities can
+  push or pull.
+- Both VMs: SSH keys only, passwords disabled, VM extensions disabled.
+- Ansible hardens SSH on both VMs (no root login, keys only, `MaxAuthTries 3`,
+  `AllowUsers` admin, forwarding off except `local` on the bastion for
+  ProxyJump; validated with `sshd -t`), installs fail2ban, and enables UFW
+  default-deny.
+- nginx hides its version (`server_tokens off`) and limits bodies to 16 KB.
+- Terraform state (which contains the generated DB password), tfvars, the
+  Ansible inventory and the vault file are excluded from Git.
 
 ## Findings log
 Each finding: what was found, how, its severity, and what we did about it.
@@ -74,11 +104,21 @@ Each finding: what was found, how, its severity, and what we did about it.
 | 9 | 2026-11-20 | Checkov `CKV_AZURE_50` | VM extensions were allowed. Extensions run code as root on the VM and widen the attack surface. | Low | **Fixed:** `allow_extension_operations = false`. Ansible configures the VM over SSH instead. |
 | 10 | 2026-11-20 | Checkov `CKV_AZURE_119` | The VM's network interface has a public IP. | Medium | **Accepted:** see below. |
 | 11 | 2026-11-20 | Manual review of the playbook | SSH relied on Ubuntu defaults: root login and keyboard-interactive auth were not explicitly disabled, and there was no brute-force protection. | Medium | **Fixed:** sshd hardening drop-in plus fail2ban (see *Infrastructure* above). |
+| 12 | 2026-11-20 | Checkov `CKV_AZURE_160` | Port 80 on the bastion's NSG is open to the internet. | Medium | **Accepted:** see below. |
+| 13 | 2026-11-20 | Checkov `CKV2_AZURE_57` | PostgreSQL Flexible Server has no private endpoint. | - | **False positive:** the server uses VNet integration (delegated subnet, private DNS, `public_network_access_enabled = false`), the other fully private option. Skipped with a reason in `database.tf`. |
+| 14 | 2026-11-20 | Checkov `CKV_AZURE_136` | PostgreSQL geo-redundant backup is off. | Low | **Accepted:** see below. |
+| 15 | 2026-11-20 | Checkov `CKV_AZURE_139/163/164/165/166/167/233/237` | ACR: public network access, vulnerability scanning, content trust, geo-replication, quarantine, retention policy, zone redundancy, dedicated data endpoints. | Low | **Accepted:** all are **Premium-SKU-only** features except `CKV_AZURE_163` (scanning), which Trivy already covers before every push. See below. |
+| 16 | 2026-11-20 | Architecture review (summative) | The F3 design put the app VM on a public IP (finding #10). | Medium | **Fixed:** the app VM is now in a private subnet with no public IP, and only the bastion is public. `CKV_AZURE_119` now applies only to the bastion, where a public IP is its job. |
 
 ### Accepted risks
 | Finding | Why it is accepted | Compensating controls | Where it is skipped |
 |---------|--------------------|-----------------------|---------------------|
-| #10 `CKV_AZURE_119`: public IP on the NIC | Single-VM design with no load balancer, Application Gateway or Bastion. The API must be reachable and the admin must be able to SSH in. Adding a load balancer or Bastion would multiply the cost for a student project. | NSG and UFW allow SSH **only** from `admin_cidr`, SSH is key-only and hardened, fail2ban runs, and every other port is denied. | `# checkov:skip=CKV_AZURE_119` comment in `terraform/main.tf` |
-| #8 `CKV2_ANSIBLE_1`: HTTP health check | The request goes to `127.0.0.1` on the VM itself and never crosses a network, so TLS would add nothing. | None needed. | `.checkov.yaml` |
-| API served over plain HTTP | No domain name or certificate yet. | **Must** be put behind a TLS-terminating reverse proxy (e.g. Caddy or nginx with Let's Encrypt) before real financial records are stored. Tracked for the summative. | n/a |
-| Unfixed image CVEs are not blocking | Trivy runs with `--ignore-unfixed`: a CVE with no released fix can't be patched, and blocking on it would block every PR. | The pipeline fails as soon as a fix is published, so the next PR picks it up. | `ci.yml` (`--ignore-unfixed`) |
+| #10/#16 `CKV_AZURE_119`: public IP on the **bastion** NIC | The bastion is the single, deliberate public entry point (jump host and reverse proxy). Azure Bastion or Application Gateway would cost far more than the whole project. | NSG: SSH only from `admin_cidr` (and the CD runner, only during a deploy), HTTP 80 only. Hardened SSH, fail2ban, UFW. The app VM and the database stay private. | `# checkov:skip=CKV_AZURE_119` in `terraform/compute.tf` |
+| #12 `CKV_AZURE_160`: HTTP 80 open to the internet | This is the public web entry point. There's no domain or certificate yet, so HTTPS isn't possible without a self-signed certificate. | nginx forwards only to the app's port. **Next step:** a domain plus Let's Encrypt (certbot) on nginx, then redirect 80 to 443. | `# checkov:skip=CKV_AZURE_160` in `terraform/network.tf` |
+| **API served over plain HTTP** (same root cause as #12) | As above. Data between the bastion and the app VM stays on the private VNet, and the app-to-database traffic **is** TLS. | **Must** add TLS before real financial records are stored. | n/a |
+| #14 `CKV_AZURE_136`: no geo-redundant DB backup | It doubles backup storage cost. A one-region outage is an acceptable risk for a student project. | 7-day point-in-time restore in the region. | `# checkov:skip=CKV_AZURE_136` in `terraform/database.tf` |
+| #15 ACR Premium-only checks | Premium costs about 10× Basic. | Admin user off, Entra ID auth only, short-lived pull tokens, images Trivy-scanned before every push. | `# checkov:skip=...` lines in `terraform/registry.tf` |
+| App VM outbound internet uses Azure default outbound access (no NAT gateway) | A NAT gateway costs about US$1 a day, roughly doubling the cost. It's needed only for apt, Docker and ACR pulls. | Outbound only. Inbound is still limited to the bastion subnet by the NSG and UFW. | `default_outbound_access_enabled = true` in `terraform/network.tf` |
+| #8 `CKV2_ANSIBLE_1`: HTTP health checks | The requests go to `127.0.0.1` on the VM itself and never cross a network. | None needed. | `.checkov.yaml` |
+| Unfixed image CVEs are not blocking | Trivy runs with `--ignore-unfixed`: a CVE with no released fix can't be patched, and blocking on it would block every PR. | The pipeline fails as soon as a fix is published, so the next PR picks it up. | `ci.yml` and `cd.yml` (`--ignore-unfixed`) |
+| Docker-published ports bypass UFW | Docker writes its own iptables rules, so UFW doesn't filter port 5000 on the app VM. | The port is bound to the private IP only, and the Azure NSG (enforced outside the VM) allows 5000 only from the bastion subnet. | n/a |
