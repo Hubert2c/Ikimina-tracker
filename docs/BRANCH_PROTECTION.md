@@ -5,8 +5,7 @@ Settings → Branches → Add branch ruleset / protection rule → pattern `main
 | Setting | Why it matters |
 |---------|----------------|
 | Require a pull request before merging | No direct pushes; every change is visible and reviewable |
-| Require approvals (1) | A second person catches bugs and shares knowledge |
-| Dismiss stale approvals on new commits | An approval can't be reused for code the reviewer never saw |
+| Require approvals: **0** | Solo project: GitHub does not let an author approve their own PR, so 1 approval would block every merge. The PR plus required CI checks is the gate. Raise to 1 if a collaborator joins |
 | Require status checks to pass: `Lint (flake8)`, `Test (pytest)`, `Docker build`, `Infrastructure validation` | Code that fails linting, tests, Docker validation, or infrastructure validation can't merge |
 | Require branches to be up to date | Prevents merging code tested against an outdated main |
 | Require conversation resolution | Review feedback can't be silently ignored |
@@ -20,4 +19,4 @@ GitHub only lists a status check after it has run at least once, so:
 3. In the search box add the four job names exactly as they appear in the
    Actions tab: `Lint (flake8)`, `Test (pytest)`, `Docker build`,
    `Infrastructure validation`.
-4. Save. Open a PR: the merge button stays disabled until all three are green.
+4. Save. Open a PR: the merge button stays disabled until all four are green.

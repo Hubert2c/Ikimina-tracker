@@ -70,7 +70,7 @@ git add README.md docs/
 git commit -m "Document Docker Compose and CI"
 git push -u origin docs/f2-readme
 ```
-Replace `<YOUR-GITHUB-USERNAME>` in the README badge first. Merge after review.
+Merge after CI passes.
 
 ## 7. Tag the submission
 ```bash

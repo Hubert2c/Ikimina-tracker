@@ -1,4 +1,5 @@
 # Project Board (GitHub Projects, Kanban)
+**Live board:** https://github.com/users/Hubert2c/projects/1. Every item below is a GitHub Issue (#4 to #20) on that board; this file is the original plan.
 
 Columns: Backlog / In Progress / Done. Milestones: Formative 1, Formative 2.
 Labels: feature, devops, security, testing, documentation.
