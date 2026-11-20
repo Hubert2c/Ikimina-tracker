@@ -1,0 +1,10 @@
+# Checkov configuration, used by the "Security scan (IaC)" CI job.
+# Every skipped check is an accepted risk explained in SECURITY.md.
+compact: true
+quiet: true
+skip-path:
+  - venv
+skip-check:
+  # Ansible health check calls http://127.0.0.1 on the VM itself; the
+  # request never leaves the host, so TLS adds nothing. (SECURITY.md #8)
+  - CKV2_ANSIBLE_1
