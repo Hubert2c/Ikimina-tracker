@@ -1,7 +1,6 @@
 """Business logic, kept separate from HTTP concerns (separation of concerns)."""
 
 import math
-import os
 
 # Input limits (security: stop oversized or nonsense data from being stored).
 MAX_NAME_LENGTH = 100            # longest allowed group or member name
