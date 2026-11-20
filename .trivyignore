@@ -1,0 +1,3 @@
+# Trivy ignore list, used by the "Security scan (container image)" CI job.
+# Add one CVE ID per line ONLY after documenting it as an accepted risk in
+# SECURITY.md (what it is, why it doesn't apply or can't be fixed yet).
