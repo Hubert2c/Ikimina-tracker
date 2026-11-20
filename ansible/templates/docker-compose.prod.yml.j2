@@ -1,0 +1,27 @@
+# Managed by Ansible (ikimina-tracker). Production stack on the app VM.
+# Unlike the local docker-compose.yml there is no "db" service: the app uses
+# the managed Azure Database for PostgreSQL (DATABASE_URL in .env).
+services:
+  app:
+    image: "{{ image }}"
+    container_name: ikimina-app
+    env_file: .env
+    ports:
+      # Bound to the VM's private IP only; the NSG lets just the bastion in.
+      - "{{ ansible_host }}:{{ app_port }}:5000"
+    restart: unless-stopped
+    # Container hardening: read-only filesystem, no extra Linux capabilities,
+    # no privilege escalation.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Keep logs from filling the disk: 3 files of 10 MB each.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
