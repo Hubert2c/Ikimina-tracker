@@ -60,6 +60,7 @@ resource "azurerm_public_ip" "main" {
 }
 
 resource "azurerm_network_interface" "main" {
+  # checkov:skip=CKV_AZURE_119:Single-VM design with no load balancer or bastion; the public IP is required to serve the API. Exposure is limited by the NSG (SSH only from admin_cidr) and UFW on the host.
   name                = "${var.vm_name}-nic"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
@@ -71,6 +72,13 @@ resource "azurerm_network_interface" "main" {
     private_ip_address_allocation = "Dynamic"
     public_ip_address_id          = azurerm_public_ip.main.id
   }
+}
+
+# Attach the NSG to the subnet as well as the NIC, so any future VM in this
+# subnet is also protected (Checkov CKV2_AZURE_31).
+resource "azurerm_subnet_network_security_group_association" "main" {
+  subnet_id                 = azurerm_subnet.main.id
+  network_security_group_id = azurerm_network_security_group.main.id
 }
 
 resource "azurerm_network_interface_security_group_association" "main" {
@@ -86,6 +94,7 @@ resource "azurerm_linux_virtual_machine" "main" {
   size                            = var.vm_size
   admin_username                  = var.admin_username
   disable_password_authentication = true
+  allow_extension_operations      = false # no VM extensions (Checkov CKV_AZURE_50); Ansible configures the host over SSH
   network_interface_ids           = [azurerm_network_interface.main.id]
   tags                            = var.tags
 
