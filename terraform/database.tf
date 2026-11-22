@@ -22,9 +22,12 @@ resource "aws_db_parameter_group" "main" {
   name   = "${var.prefix}-postgres${var.postgres_version}"
   family = "postgres${var.postgres_version}"
 
+  # Static parameter: AWS stores it as pending-reboot. It already matches the
+  # PostgreSQL 16 default, so no reboot is needed.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   parameter {
