@@ -60,3 +60,6 @@ node_modules/
 !*.tfvars.example
 ansible/inventory/hosts.ini
 ansible/group_vars/all/vault.yml
+# Saved plans can contain secrets (e.g. the generated DB password).
+tfplan
+*.tfplan

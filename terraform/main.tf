@@ -1,117 +1,38 @@
-resource "azurerm_resource_group" "main" {
-  name     = var.resource_group_name
-  location = var.location
-  tags     = var.tags
+# =============================================================================
+# Ikimina Tracker: production environment on AWS
+#
+#   Internet --80--> Bastion EC2 (public subnet, nginx reverse proxy + NAT)
+#                       |  SSH (ProxyJump) and HTTP, private network only
+#                       v
+#                    App EC2 (private subnet, no public IP, Docker)
+#                       |  5432, TLS, private network only
+#                       v
+#                    Amazon RDS for PostgreSQL (database subnets, 2 AZs)
+#
+#   GitHub Actions --push--> Amazon ECR --pull--> App EC2
+#
+# Outbound internet for the private subnet (apt, Docker, ECR pulls) goes
+# through the bastion, which also acts as a small NAT instance. A managed NAT
+# gateway would cost about USD 32/month; see SECURITY.md (accepted risks).
+#
+# Files: network.tf (VPC, subnets, routes, security groups), compute.tf
+#        (bastion + app EC2), database.tf (RDS PostgreSQL), registry.tf (ECR),
+#        github_oidc.tf (deploy role for GitHub Actions), variables.tf
+#        (inputs), outputs.tf (IPs, names, IDs).
+# =============================================================================
+
+data "aws_availability_zones" "available" {
+  # checkov:skip=CKV_AWS_394:Only the first two zones are used. If AWS ever changes that list, terraform plan shows the subnet move for review before anything is applied.
+  state = "available"
 }
 
-resource "azurerm_virtual_network" "main" {
-  name                = "${var.vm_name}-vnet"
-  address_space       = ["10.20.0.0/16"]
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
-}
+data "aws_caller_identity" "current" {}
 
-resource "azurerm_subnet" "main" {
-  name                 = "${var.vm_name}-subnet"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.20.1.0/24"]
-}
+locals {
+  # The app VM and bastion share one AZ; RDS needs subnets in two.
+  primary_az   = data.aws_availability_zones.available.names[0]
+  secondary_az = data.aws_availability_zones.available.names[1]
 
-resource "azurerm_network_security_group" "main" {
-  name                = "${var.vm_name}-nsg"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
-
-  security_rule {
-    name                       = "Allow-SSH-From-Admin-CIDR"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = var.admin_cidr
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "Allow-API"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = tostring(var.app_port)
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-}
-
-resource "azurerm_public_ip" "main" {
-  name                = "${var.vm_name}-public-ip"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Static"
-  sku                 = "Standard"
-  tags                = var.tags
-}
-
-resource "azurerm_network_interface" "main" {
-  # checkov:skip=CKV_AZURE_119:Single-VM design with no load balancer or bastion; the public IP is required to serve the API. Exposure is limited by the NSG (SSH only from admin_cidr) and UFW on the host.
-  name                = "${var.vm_name}-nic"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
-
-  ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.main.id
-    private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.main.id
-  }
-}
-
-# Attach the NSG to the subnet as well as the NIC, so any future VM in this
-# subnet is also protected (Checkov CKV2_AZURE_31).
-resource "azurerm_subnet_network_security_group_association" "main" {
-  subnet_id                 = azurerm_subnet.main.id
-  network_security_group_id = azurerm_network_security_group.main.id
-}
-
-resource "azurerm_network_interface_security_group_association" "main" {
-  network_interface_id      = azurerm_network_interface.main.id
-  network_security_group_id = azurerm_network_security_group.main.id
-}
-
-resource "azurerm_linux_virtual_machine" "main" {
-  name                            = var.vm_name
-  computer_name                   = var.vm_name
-  resource_group_name             = azurerm_resource_group.main.name
-  location                        = azurerm_resource_group.main.location
-  size                            = var.vm_size
-  admin_username                  = var.admin_username
-  disable_password_authentication = true
-  allow_extension_operations      = false # no VM extensions (Checkov CKV_AZURE_50); Ansible configures the host over SSH
-  network_interface_ids           = [azurerm_network_interface.main.id]
-  tags                            = var.tags
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.ssh_public_key
-  }
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "StandardSSD_LRS"
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server"
-    version   = "latest"
-  }
+  # Ubuntu AMIs on AWS create this user and install the key pair for it.
+  admin_username = "ubuntu"
 }

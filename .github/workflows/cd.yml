@@ -1,0 +1,235 @@
+# =============================================================================
+# CD pipeline: "Deploy to Production"
+# Runs only when a change lands on main (i.e. a pull request is merged).
+#
+#   1. CI checks      - the full CI workflow (lint, tests, Docker build,
+#                       infrastructure validation, pip-audit, Trivy, Checkov)
+#   2. Build & push   - builds the image, scans it with Trivy, pushes it to the
+#                       private Amazon ECR repository tagged with the commit SHA
+#   3. Deploy         - logs in to AWS, opens SSH on the bastion for this
+#                       runner's IP only, runs the Ansible playbook through the
+#                       bastion (pull the new image, docker compose up -d), then
+#                       smoke-tests the public URL. The SSH rule is always removed.
+#
+# AWS login uses OpenID Connect (OIDC): GitHub proves who it is to AWS and
+# assumes the deploy role (terraform/github_oidc.tf) for short-lived
+# credentials, so no AWS access key is stored in GitHub.
+# One-time setup: scripts/setup-github-deploy.sh (see README, "Deployment").
+# =============================================================================
+
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # manual "Run workflow" button (e.g. first deploy)
+
+# Never run two deployments at the same time, and never cancel one halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPOSITORY: ikimina-tracker
+  TRIVY_IMAGE: aquasec/trivy:0.58.1
+
+jobs:
+  # ---------------------------------------------------------- 1. CI ----
+  ci:
+    name: CI checks
+    uses: ./.github/workflows/ci.yml
+
+  # -------------------------------------------------- 2. BUILD & PUSH ----
+  build-push:
+    name: Build, scan and push image to ECR
+    needs: ci
+    # Skip (instead of failing) until the AWS deployment has been set up.
+    if: ${{ vars.ECR_REGISTRY != '' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # needed for the OIDC login to AWS
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Work out the image name
+        id: meta
+        run: echo "image=${{ vars.ECR_REGISTRY }}/${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to the container registry (ECR)
+        run: |
+          aws ecr get-login-password \
+            | docker login --username AWS --password-stdin "${{ vars.ECR_REGISTRY }}"
+
+      - name: Build the image
+        run: |
+          docker build \
+            --tag "${{ steps.meta.outputs.image }}" \
+            --tag "${{ vars.ECR_REGISTRY }}/${IMAGE_REPOSITORY}:latest" \
+            .
+
+      - name: Scan the exact image being shipped (Trivy)
+        # Same rule as CI: fail on HIGH/CRITICAL vulnerabilities that have a fix.
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/.trivyignore:/.trivyignore:ro" \
+            "$TRIVY_IMAGE" image \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --ignorefile /.trivyignore --exit-code 1 --no-progress \
+            "${{ steps.meta.outputs.image }}"
+
+      - name: Push the image to ECR
+        run: |
+          docker push "${{ steps.meta.outputs.image }}"
+          docker push "${{ vars.ECR_REGISTRY }}/${IMAGE_REPOSITORY}:latest"
+
+      - name: Log out of the registry
+        if: always()
+        run: docker logout "${{ vars.ECR_REGISTRY }}"
+
+  # -------------------------------------------------------- 3. DEPLOY ----
+  deploy:
+    name: Deploy to production (Ansible)
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Find this runner's public IP
+        id: runner
+        run: echo "ip=$(curl --fail --silent --show-error https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+
+      - name: Open SSH on the bastion for this runner only (temporary)
+        run: |
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${{ vars.BASTION_SG_ID }}" \
+            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${{ steps.runner.outputs.ip }}/32,Description=CD runner (temporary)}]" \
+            --output text > /dev/null
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: |
+          pip install ansible-core==2.18.6
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Set up the SSH key and inventory
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          BASTION_IP: ${{ vars.BASTION_IP }}
+          APP_PRIVATE_IP: ${{ vars.APP_PRIVATE_IP }}
+          ADMIN_USERNAME: ${{ vars.ADMIN_USERNAME }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # accept-new: trust a host key the first time (fresh runner), but
+          # refuse to connect if it ever changes afterwards in this run.
+          cat > ~/.ssh/config <<EOF
+          Host *
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          EOF
+          chmod 600 ~/.ssh/config
+          cat > "$RUNNER_TEMP/hosts.ini" <<EOF
+          [bastion]
+          ikimina-bastion ansible_host=${BASTION_IP}
+
+          [app_servers]
+          ikimina-app ansible_host=${APP_PRIVATE_IP}
+
+          [app_servers:vars]
+          ansible_ssh_common_args=-o ProxyJump=${ADMIN_USERNAME}@${BASTION_IP}
+
+          [all:vars]
+          ansible_user=${ADMIN_USERNAME}
+          EOF
+
+      - name: Wait until the bastion accepts SSH
+        run: |
+          for i in $(seq 1 24); do
+            if ssh -o ConnectTimeout=5 "${{ vars.ADMIN_USERNAME }}@${{ vars.BASTION_IP }}" true; then
+              exit 0
+            fi
+            echo "Waiting for SSH ($i/24)..."; sleep 5
+          done
+          echo "Bastion not reachable over SSH"; exit 1
+
+      - name: Prepare deployment variables (registry token, database URL)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Short-lived (12 h) ECR pull token for the VM; never printed.
+          REGISTRY_TOKEN=$(aws ecr get-login-password)
+          echo "::add-mask::$REGISTRY_TOKEN"
+          umask 077
+          jq -n \
+            --arg registry_server "${{ vars.ECR_REGISTRY }}" \
+            --arg registry_token "$REGISTRY_TOKEN" \
+            --arg image_tag "$GITHUB_SHA" \
+            --arg database_url "$DATABASE_URL" \
+            '$ARGS.named' > "$RUNNER_TEMP/deploy-vars.json"
+
+      - name: Run the Ansible playbook (pull new image, docker compose up -d)
+        env:
+          ANSIBLE_FORCE_COLOR: "1"
+        run: |
+          ansible-playbook \
+            -i "$RUNNER_TEMP/hosts.ini" \
+            -e "@$RUNNER_TEMP/deploy-vars.json" \
+            ansible/playbook.yml
+
+      - name: Smoke test the live application
+        run: |
+          URL="${{ vars.APP_URL }}"
+          curl --fail --silent --show-error "$URL/health"; echo
+          curl --fail --silent --show-error "$URL/ready"; echo
+          VERSION=$(curl --fail --silent --show-error "$URL/version" | jq -r .version)
+          echo "Live version: $VERSION"
+          test "$VERSION" = "$GITHUB_SHA"
+
+      - name: Close SSH on the bastion again
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${{ vars.BASTION_SG_ID }}" \
+            --protocol tcp --port 22 \
+            --cidr "${{ steps.runner.outputs.ip }}/32" \
+            --output text > /dev/null || true
+
+      - name: Remove the SSH key and deployment variables
+        if: always()
+        run: rm -f ~/.ssh/deploy_key "$RUNNER_TEMP/deploy-vars.json"

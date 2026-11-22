@@ -1,6 +1,10 @@
+import json
+import logging
 import os
+import sys
+import time
 
-from flask import Flask, jsonify
+from flask import Flask, g, jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from .routes import bp
@@ -25,6 +29,15 @@ SECURITY_HEADERS = {
 }
 
 
+def _setup_logging(app):
+    """Send app logs to stdout so `docker logs` / `docker compose logs` show them."""
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    app.logger.handlers = [handler]
+    app.logger.setLevel(logging.INFO)
+    app.logger.propagate = False
+
+
 def _default_store():
     """Pick the storage backend from the environment.
 
@@ -41,6 +54,25 @@ def create_app(store=None):
     app.config["STORE"] = store or _default_store()
     app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     app.register_blueprint(bp)
+    _setup_logging(app)
+
+    @app.before_request
+    def start_timer():
+        # Remember when the request started, to measure how long it took
+        g.start_time = time.perf_counter()
+
+    @app.after_request
+    def log_request(response):
+        # One JSON line per request: easy to read AND easy to search/filter
+        # later with a log tool (e.g. `docker logs ikimina-app | grep '"status": 5'`)
+        started = g.get("start_time", time.perf_counter())
+        app.logger.info(json.dumps({
+            "method": request.method,
+            "path": request.path,
+            "status": response.status_code,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+        }))
+        return response
 
     @app.after_request
     def add_security_headers(response):

@@ -60,3 +60,16 @@ def test_list_groups(client):
     client.post("/groups", json={"name": "Huye Women's Group"})
     names = [g["name"] for g in client.get("/groups").get_json()]
     assert names == ["Kigali Savers", "Huye Women's Group"]
+
+
+def test_ready_when_store_works(client):
+    r = client.get("/ready")
+    assert r.status_code == 200
+    assert r.get_json() == {"status": "ready", "database": "ok"}
+
+
+def test_version_defaults_to_dev(client, monkeypatch):
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    assert client.get("/version").get_json() == {"version": "dev"}
+    monkeypatch.setenv("APP_VERSION", "abc1234")
+    assert client.get("/version").get_json() == {"version": "abc1234"}

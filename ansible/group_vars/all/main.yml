@@ -1,0 +1,26 @@
+---
+# Non-secret settings shared by both plays. Secrets go in vault.yml next to
+# this file (ignored by Git, encrypted with ansible-vault); see ansible/README.md.
+
+# Port the API container listens on (inside the private network).
+app_port: 5000
+
+# The bastion's subnet: the only source allowed to reach the app VM.
+# Must match public_subnet_cidr in Terraform.
+bastion_subnet_cidr: "10.20.1.0/24"
+
+# The app VM's subnet: the bastion forwards (NATs) its outbound traffic.
+# Must match private_subnet_cidr in Terraform.
+app_subnet_cidr: "10.20.2.0/24"
+
+# Image to deploy: <registry_server>/<image_repository>:<image_tag>.
+# registry_server comes from `terraform output -raw ecr_registry`; the CD
+# pipeline passes it with -e, together with a short-lived registry_token
+# (`aws ecr get-login-password`). image_tag is the Git commit SHA (CD) or -e.
+registry_server: ""
+registry_username: AWS
+image_repository: ikimina-tracker
+
+# Connection URL for the managed database. Read from the vault for manual
+# runs; the CD pipeline passes it from the DATABASE_URL GitHub secret.
+database_url: "{{ vault_database_url | default('') }}"
