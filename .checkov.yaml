@@ -5,6 +5,6 @@ quiet: true
 skip-path:
   - venv
 skip-check:
-  # Ansible health check calls http://127.0.0.1 on the VM itself; the
+  # Ansible health check calls the app VM's own address from the VM itself; the
   # request never leaves the host, so TLS adds nothing. (SECURITY.md #8)
   - CKV2_ANSIBLE_1
