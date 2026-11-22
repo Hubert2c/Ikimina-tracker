@@ -53,9 +53,11 @@ resource "aws_instance" "bastion" {
 
   tags = { Name = "${var.prefix}-bastion", role = "bastion" }
 
-  # Don't replace the VM every time Canonical publishes a new image.
   lifecycle {
-    ignore_changes = [ami]
+    # ami: don't replace the VM every time Canonical publishes a new image.
+    # associate_public_ip_address: once the Elastic IP is attached, AWS reports
+    # true here, which would otherwise force a replacement on every apply.
+    ignore_changes = [ami, associate_public_ip_address]
   }
 }
 
