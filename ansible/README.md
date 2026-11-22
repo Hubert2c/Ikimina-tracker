@@ -88,4 +88,4 @@ ansible-playbook -i hosts.ini -e @deploy-vars.json ansible/playbook.yml
 ## Checks in CI
 - **Infrastructure validation:** `ansible-playbook --syntax-check`
 - **Security scan (IaC):** Checkov on the playbook (one accepted finding: the
-  `http://127.0.0.1` health checks; see [../SECURITY.md](../SECURITY.md))
+  plain-HTTP health checks against the VM's own address; see [../SECURITY.md](../SECURITY.md))
