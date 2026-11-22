@@ -155,6 +155,17 @@ variable "github_repository" {
   }
 }
 
+variable "github_immutable_repository" {
+  description = "Immutable form owner@id/name@id, as GitHub puts it in OIDC tokens when immutable subject claims are on. Find it with: gh api repos/OWNER/NAME/actions/oidc/customization/sub. Empty to trust only the classic form."
+  type        = string
+  default     = "Hubert2c@157759591/Ikimina-tracker@1431093439"
+
+  validation {
+    condition     = var.github_immutable_repository == "" || can(regex("^[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$", var.github_immutable_repository))
+    error_message = "github_immutable_repository must look like owner@123/name@456, or be empty."
+  }
+}
+
 variable "create_github_oidc_provider" {
   description = "Create the GitHub OIDC provider in this AWS account. Set false if the account already has one."
   type        = bool
