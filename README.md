@@ -5,8 +5,9 @@
 
 > Simple, transparent digital record-keeping for community savings groups.
 
-**Live app:** _not deployed yet. After the first deploy, put the Terraform
-`app_url` output here (e.g. `http://<bastion-ip>/health`)._
+**Live app:** http://13.63.117.186 (AWS, eu-north-1). Try
+[`/health`](http://13.63.117.186/health), [`/ready`](http://13.63.117.186/ready)
+and [`/version`](http://13.63.117.186/version).
 
 This README is the operations manual: what the system is, how it is built and
 deployed, and how to run, check and fix it.
