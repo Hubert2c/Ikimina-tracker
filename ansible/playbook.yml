@@ -247,11 +247,14 @@
         'Created' in compose_up.stderr
 
     # --- Verify -----------------------------------------------------------------
-    # Plain HTTP is fine here: 127.0.0.1 is the VM itself, so traffic never
-    # leaves the host (accepted Checkov finding CKV2_ANSIBLE_1, see SECURITY.md).
+    # The container port is published on the VM's private IP only (see
+    # docker-compose.prod.yml.j2), not on 127.0.0.1, so check that address.
+    # Plain HTTP is fine here: it is the VM's own address, so the request
+    # never leaves the host (accepted Checkov finding CKV2_ANSIBLE_1, see
+    # SECURITY.md).
     - name: Wait until the app is ready (database reachable)
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ app_port }}/ready"
+        url: "http://{{ ansible_host }}:{{ app_port }}/ready"
         status_code: 200
       register: app_ready
       retries: 24
@@ -260,7 +263,7 @@
 
     - name: Check that the new version is running
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ app_port }}/version"
+        url: "http://{{ ansible_host }}:{{ app_port }}/version"
         return_content: true
       register: app_version
       failed_when: app_version.json.version != image_tag
