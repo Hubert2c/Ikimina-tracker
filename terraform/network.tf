@@ -162,7 +162,7 @@ resource "aws_vpc_security_group_ingress_rule" "app_ssh" {
 # The API port only from the bastion (nginx forwards public traffic here).
 resource "aws_vpc_security_group_ingress_rule" "app_api" {
   security_group_id            = aws_security_group.app.id
-  description                  = "API port from the bastion's nginx"
+  description                  = "API port from the bastion nginx" # AWS allows no apostrophes here
   ip_protocol                  = "tcp"
   from_port                    = var.app_port
   to_port                      = var.app_port
