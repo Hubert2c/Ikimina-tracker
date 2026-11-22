@@ -17,7 +17,7 @@ deployed, and how to run, check and fix it.
 | [2. Architecture](#2-architecture) | Diagram and how a request and a deploy flow |
 | [3. Git-to-production workflow](#3-git-to-production-workflow) | Branches, CI, CD |
 | [4. Run it locally](#4-run-it-locally) | Docker Compose, plain Python, tests |
-| [5. Deploy to Azure (first time)](#5-deploy-to-azure-first-time) | Terraform, GitHub setup, first deploy |
+| [5. Deploy to AWS (first time)](#5-deploy-to-aws-first-time) | Terraform, GitHub setup, first deploy |
 | [6. Day-2 operations](#6-day-2-operations) | Health checks, logs, SSH, rollback, teardown |
 | [7. Security](#7-security) | Controls and scanning |
 | [8. Repository layout](#8-repository-layout) | Where everything lives |
@@ -45,7 +45,7 @@ without smartphones.
 3. Record a member's contribution (validated, positive amounts only)
 4. View per-member balances and the group total
 5. Check an individual member's balance
-6. Persistent PostgreSQL storage (managed Azure Database in production)
+6. Persistent PostgreSQL storage (managed Amazon RDS in production)
 7. Health, readiness and version endpoints, plus JSON request logs
 8. *(Planned)* USSD / SMS access
 
@@ -73,7 +73,7 @@ curl $URL/groups/1/members/Aline/balance
 
 ### Technology stack
 Python 3.12, Flask, Gunicorn · PostgreSQL 16 · pytest, flake8 · Docker,
-Docker Compose · GitHub Actions (CI and CD) · Terraform (Azure) · Ansible ·
+Docker Compose · GitHub Actions (CI and CD) · Terraform (AWS) · Ansible ·
 pip-audit, Trivy, Checkov · nginx
 
 ---
@@ -91,17 +91,17 @@ flowchart LR
         cd[CD workflow<br/>on merge to main]
     end
 
-    subgraph AZ["Azure resource group: ikimina-rg"]
-        acr[(Azure Container<br/>Registry, private)]
-        subgraph VNET["VNet 10.20.0.0/16"]
-            subgraph PUB["Public subnet 10.20.1.0/24, NSG: 22 from admin, 80 from internet"]
-                bastion[Bastion VM<br/>nginx reverse proxy<br/>SSH jump host]
+    subgraph AWS["AWS account (one region)"]
+        ecr[(Amazon ECR<br/>private registry)]
+        subgraph VPC["VPC 10.20.0.0/16"]
+            subgraph PUB["Public subnet 10.20.1.0/24, SG: 22 from admin, 80 from internet"]
+                bastion[Bastion EC2<br/>nginx reverse proxy<br/>SSH jump host + NAT]
             end
-            subgraph PRIV["Private subnet 10.20.2.0/24, NSG: 22 and 5000 from bastion only"]
-                app[App VM, no public IP<br/>Docker: ikimina-tracker<br/>container]
+            subgraph PRIV["Private subnet 10.20.2.0/24, SG: 22 and 5000 from bastion only"]
+                app[App EC2, no public IP<br/>Docker: ikimina-tracker<br/>container]
             end
-            subgraph DBS["Database subnet 10.20.3.0/24, NSG: 5432 from app only"]
-                db[(Azure Database for<br/>PostgreSQL, private)]
+            subgraph DBS["Database subnets 10.20.3.0/24 + 10.20.4.0/24, SG: 5432 from app only"]
+                db[(Amazon RDS for<br/>PostgreSQL, private)]
             end
         end
     end
@@ -110,10 +110,10 @@ flowchart LR
     repo -- every PR --> ci
     repo -- merge --> cd
     cd -- "step 1: run checks" --> ci
-    cd -- "step 2: push image tagged with SHA" --> acr
+    cd -- "step 2: push image tagged with SHA" --> ecr
     cd -- "step 3: Ansible over SSH<br/>through the bastion" --> bastion
     bastion -. ProxyJump .-> app
-    app -- "docker pull" --> acr
+    app -- "docker pull (via bastion NAT)" --> ecr
 
     user -- "HTTP :80" --> bastion
     bastion -- "HTTP :5000" --> app
@@ -126,8 +126,8 @@ forwards it over the private network to the container on the app VM
 on its private IP.
 
 **A deployment:** a merged PR triggers `cd.yml`. It runs all CI checks, builds
-the image, scans it with Trivy, and pushes it to ACR tagged with the commit SHA.
-Then it logs in to Azure (OIDC), opens SSH on the bastion for the runner's IP
+the image, scans it with Trivy, and pushes it to ECR tagged with the commit SHA.
+Then it logs in to AWS (OIDC), opens SSH on the bastion for the runner's IP
 only, and runs Ansible through the bastion. Ansible pulls the new image and
 runs `docker compose up -d`, then waits for `/ready` and checks that `/version`
 equals the commit SHA. CD smoke-tests the public URL and closes the SSH rule
@@ -135,11 +135,12 @@ again.
 
 | Component | Terraform file | Why it's there |
 |-----------|----------------|----------------|
-| VNet + 3 subnets + 3 NSGs | `terraform/network.tf` | Network segmentation: each tier only accepts traffic from the tier in front of it |
-| Bastion VM (B1s, public IP) | `terraform/compute.tf` | The only public entry point: jump host for SSH and Ansible, nginx for web traffic |
-| App VM (B1s, **no public IP**) | `terraform/compute.tf` | Runs the container; can't be reached from the internet |
-| Azure Database for PostgreSQL (B1ms) | `terraform/database.tf` | Managed backups, patching and TLS; private access only |
-| Azure Container Registry (Basic) | `terraform/registry.tf` | Private image store; admin user disabled |
+| VPC + 4 subnets + 3 security groups | `terraform/network.tf` | Network segmentation: each tier only accepts traffic from the tier in front of it |
+| Bastion EC2 (t3.micro, Elastic IP) | `terraform/compute.tf` | The only public entry point: jump host for SSH and Ansible, nginx for web traffic, NAT for the private subnet |
+| App EC2 (t3.micro, **no public IP**) | `terraform/compute.tf` | Runs the container; can't be reached from the internet |
+| Amazon RDS for PostgreSQL (db.t4g.micro) | `terraform/database.tf` | Managed backups, patching, encryption and enforced TLS; not publicly accessible |
+| Amazon ECR | `terraform/registry.tf` | Private image store; scan on push |
+| GitHub OIDC deploy role | `terraform/github_oidc.tf` | CD gets short-lived AWS credentials; no access keys stored |
 
 ---
 
@@ -167,8 +168,8 @@ again.
 | Stage | Job | Steps |
 |-------|-----|-------|
 | 1 | **CI checks** | Calls `ci.yml`: all seven checks above |
-| 2 | **Build, scan and push image to ACR** | Azure login (OIDC) → `az acr login` → `docker build` → Trivy scan of the exact image → `docker push :<sha>` and `:latest` |
-| 3 | **Deploy to production (Ansible)** | Azure login → temporary NSG rule for the runner IP → Ansible through the bastion (registry login, pull, `docker compose up -d`, `/ready`, `/version`) → public smoke test → NSG rule removed (always) |
+| 2 | **Build, scan and push image to ECR** | AWS login (OIDC) → ECR `docker login` → `docker build` → Trivy scan of the exact image → `docker push :<sha>` and `:latest` |
+| 3 | **Deploy to production (Ansible)** | AWS login → temporary security group rule for the runner IP → Ansible through the bastion (registry login, pull, `docker compose up -d`, `/ready`, `/version`) → public smoke test → rule removed (always) |
 
 Deploys never overlap (`concurrency: deploy-production`), and the GitHub
 `production` environment shows the history and the live URL.
@@ -217,34 +218,35 @@ TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/ikimina_test pytest -v  
 
 ---
 
-## 5. Deploy to Azure (first time)
+## 5. Deploy to AWS (first time)
 
-You need: an Azure subscription (Azure for Students works),
-[Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
+You need: an AWS account (sign in as an IAM user or through IAM Identity
+Center, not the root user),
+[AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html),
 [Terraform](https://developer.hashicorp.com/terraform/install) 1.6 or newer,
 [GitHub CLI](https://cli.github.com), and an SSH key (`ssh-keygen -t ed25519`).
-It costs about **US$1.30 a day** (2× B1s VMs, PostgreSQL B1ms, ACR Basic, 1 public IP).
+Outside the free tier it costs about **US$1 a day** (2× t3.micro, RDS db.t4g.micro,
+1 public IPv4, a little storage); new accounts' free tier or credits cover most of it.
 
 **1. Sign in**
 ```bash
-az login
-az account set --subscription "<name or id>"
-export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+aws configure                  # or: aws configure sso && aws sso login
+aws sts get-caller-identity    # check the account
 gh auth login
 ```
 
 **2. Provision the infrastructure.** See [terraform/README.md](terraform/README.md).
 ```bash
-cp terraform/terraform.tfvars.example terraform/terraform.tfvars   # set location, admin_cidr, ssh_public_key
+cp terraform/terraform.tfvars.example terraform/terraform.tfvars   # set region, admin_cidr, ssh_public_key
 terraform -chdir=terraform init
 terraform -chdir=terraform plan -out=tfplan     # review it
-terraform -chdir=terraform apply tfplan         # about 10 to 15 minutes (PostgreSQL is the slow part)
+terraform -chdir=terraform apply tfplan         # about 10 minutes (RDS is the slow part)
 terraform -chdir=terraform output
 ```
 
-**3. Connect GitHub Actions to Azure (one time).** This creates an OIDC
-identity with Contributor on the resource group only, plus the `production`
-environment's variables and secrets.
+**3. Connect GitHub Actions to AWS (one time).** Terraform already created the
+OIDC deploy role (push to ECR and edit the bastion's SSH rule, nothing else).
+This script stores the `production` environment's variables and secrets.
 ```bash
 bash scripts/setup-github-deploy.sh ~/.ssh/id_ed25519
 ```
@@ -282,26 +284,26 @@ To run Ansible by hand instead of through CD, see
 
 Troubleshooting:
 - **`/health` OK but `/ready` 503:** the app can't reach PostgreSQL. Check the
-  server is running in the Azure portal, and that `DATABASE_URL` (the GitHub
+  instance is "Available" in the RDS console, and that `DATABASE_URL` (the GitHub
   secret) still matches `terraform output -raw database_url`.
 - **502 from nginx:** the container on the app VM is down. SSH in, then run
   `sudo docker ps -a` and `sudo docker logs ikimina-app`.
-- **CD fails at "Wait until the bastion accepts SSH":** the NSG rule hasn't
-  propagated or the VM is stopped. Re-run the job.
+- **CD fails at "Wait until the bastion accepts SSH":** the security group rule
+  hasn't applied yet or the instance is stopped. Re-run the job.
 
 ---
 
 ## 7. Security
 Full details, scan findings and accepted risks: [SECURITY.md](SECURITY.md).
 - **Network:** only the bastion is public (SSH from the admin IP, HTTP). The app
-  VM and the database have no public endpoint, and each subnet's NSG only allows
-  the tier in front of it.
-- **Hosts:** SSH keys only, no root login, fail2ban, UFW default-deny, VM
-  extensions disabled.
+  VM and the database have no public endpoint, and each tier's security group only
+  allows the tier in front of it.
+- **Hosts:** SSH keys only, no root login, fail2ban, UFW default-deny, IMDSv2
+  only, no IAM role on the VMs.
 - **Container:** non-root user, read-only filesystem, all Linux capabilities
   dropped, Debian security updates installed at build.
-- **Secrets:** no passwords in Git. Azure login uses OIDC, the DB password is
-  generated by Terraform and stored as a GitHub secret, and ACR pull tokens are
+- **Secrets:** no passwords in Git. AWS login uses OIDC, the DB password is
+  generated by Terraform and stored as a GitHub secret, and ECR pull tokens are
   short-lived and removed after the pull.
 - **Pipeline:** pip-audit, Trivy (fails on HIGH and CRITICAL) and Checkov run on
   every PR and before every deploy.
@@ -317,7 +319,7 @@ app/                      Flask app: routes.py (HTTP), services.py (logic), stor
 tests/                    pytest suite (runs on both storage backends)
 Dockerfile                image build (non-root, healthcheck, Gunicorn)
 docker-compose.yml        local stack: app + PostgreSQL
-terraform/                Azure infrastructure: network, compute, database, registry
+terraform/                AWS infrastructure: network, compute, database, registry, OIDC role
 ansible/                  playbook.yml, tasks/, templates/, inventory/, group_vars/
 scripts/                  setup-github-deploy.sh (one-time CD setup)
 .github/workflows/        ci.yml (checks), cd.yml (deploy)

@@ -9,10 +9,16 @@ app_port: 5000
 # Must match public_subnet_cidr in Terraform.
 bastion_subnet_cidr: "10.20.1.0/24"
 
-# Image to deploy: <acr_login_server>/<image_repository>:<image_tag>.
-# acr_login_server comes from `terraform output -raw acr_login_server`; the CD
-# pipeline passes it with -e. image_tag is the Git commit SHA (CD) or -e.
-acr_login_server: ""
+# The app VM's subnet: the bastion forwards (NATs) its outbound traffic.
+# Must match private_subnet_cidr in Terraform.
+app_subnet_cidr: "10.20.2.0/24"
+
+# Image to deploy: <registry_server>/<image_repository>:<image_tag>.
+# registry_server comes from `terraform output -raw ecr_registry`; the CD
+# pipeline passes it with -e, together with a short-lived registry_token
+# (`aws ecr get-login-password`). image_tag is the Git commit SHA (CD) or -e.
+registry_server: ""
+registry_username: AWS
 image_repository: ikimina-tracker
 
 # Connection URL for the managed database. Read from the vault for manual

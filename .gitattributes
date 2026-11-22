@@ -1,2 +1,4 @@
 # Shell scripts must keep Unix line endings, or bash fails on Windows checkouts.
 *.sh text eol=lf
+# Terraform templates rendered into Linux boot scripts (user data) need LF too.
+*.tftpl text eol=lf

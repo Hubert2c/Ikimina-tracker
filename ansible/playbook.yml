@@ -2,14 +2,16 @@
 # =============================================================================
 # Ikimina Tracker: configure both VMs and deploy the app.
 #
-#   Play 1 - bastion     : SSH hardening, fail2ban, UFW, nginx reverse proxy
+#   Play 1 - bastion     : SSH hardening, fail2ban, UFW (incl. NAT forwarding
+#                          for the private subnet), nginx reverse proxy
 #   Play 2 - app_servers : SSH hardening, fail2ban, UFW, Docker + Compose,
-#                          log in to ACR, pull the image, docker compose up -d
+#                          log in to ECR, pull the image, docker compose up -d
 #
 # The app VM has no public IP; Ansible reaches it through the bastion
 # (ProxyJump, set in the inventory). Run from the repository root:
 #   ansible-playbook -i ansible/inventory/hosts.ini ansible/playbook.yml \
-#     -e image_tag=<git sha> -e acr_token=<token> --ask-vault-pass
+#     -e image_tag=<git sha> -e registry_server=<ecr registry> \
+#     -e registry_token="$(aws ecr get-login-password)" --ask-vault-pass
 # The CD pipeline (.github/workflows/cd.yml) runs exactly this on every merge.
 # =============================================================================
 
@@ -71,10 +73,10 @@
         state: started
         enabled: true
 
-    # --- Host firewall (second layer behind the Azure NSG) ------------------
-    # SSH is allowed from anywhere at the host level because the Azure NSG
-    # already restricts it to the admin IP (plus the CD runner during a deploy,
-    # whose IP changes every run).
+    # --- Host firewall (second layer behind the AWS security group) ---------
+    # SSH is allowed from anywhere at the host level because the security
+    # group already restricts it to the admin IP (plus the CD runner during a
+    # deploy, whose IP changes every run).
     - name: Deny all inbound traffic by default
       community.general.ufw:
         direction: incoming
@@ -92,6 +94,16 @@
         proto: tcp
       loop: ["22", "80"]
 
+    # The bastion is also the NAT for the private subnet (set up at boot by
+    # Terraform user data). UFW drops forwarded traffic by default, so allow
+    # traffic that comes from the app subnet; replies are allowed by UFW's
+    # built-in "established" rule.
+    - name: Allow forwarding (NAT) for the private app subnet
+      community.general.ufw:
+        rule: allow
+        route: true
+        src: "{{ app_subnet_cidr }}"
+
     - name: Enable the host firewall
       community.general.ufw:
         state: enabled
@@ -108,26 +120,26 @@
         state: reloaded
 
 # ------------------------------------------------------------- APP VM ----
-- name: Configure the app VM and deploy the container from ACR
+- name: Configure the app VM and deploy the container from ECR
   hosts: app_servers
   become: true
 
   vars:
     ssh_allow_tcp_forwarding: "no"
     app_directory: /opt/ikimina-tracker
-    image: "{{ acr_login_server }}/{{ image_repository }}:{{ image_tag }}"
+    image: "{{ registry_server }}/{{ image_repository }}:{{ image_tag }}"
 
   tasks:
     - name: Check that the deployment settings are present
       ansible.builtin.assert:
         that:
-          - acr_login_server is defined and acr_login_server | length > 0
-          - acr_token is defined and acr_token | length > 0
+          - registry_server is defined and registry_server | length > 0
+          - registry_token is defined and registry_token | length > 0
           - image_tag is defined and image_tag | length > 0
           - database_url is defined and database_url.startswith('postgresql://')
         fail_msg: >-
-          Set acr_login_server (group_vars), database_url (vault), and pass
-          -e image_tag=... -e acr_token=... (see ansible/README.md).
+          Set database_url (vault), and pass -e image_tag=...
+          -e registry_server=... -e registry_token=... (see ansible/README.md).
         quiet: true
 
     # --- Required packages ---------------------------------------------------
@@ -201,15 +213,15 @@
         mode: "0640"
 
     # THE key task for serving traffic: authenticate to the private registry so
-    # the VM can pull the image the pipeline just pushed. The token is
-    # short-lived (about 3 hours) and is removed again after the pull.
-    - name: Log in to the private container registry (ACR)
+    # the VM can pull the image the pipeline just pushed. The ECR token is
+    # short-lived (12 hours) and is removed again after the pull.
+    - name: Log in to the private container registry (ECR)
       ansible.builtin.command:
         cmd: >-
-          docker login {{ acr_login_server }}
-          --username 00000000-0000-0000-0000-000000000000
+          docker login {{ registry_server }}
+          --username {{ registry_username }}
           --password-stdin
-        stdin: "{{ acr_token }}"
+        stdin: "{{ registry_token }}"
       changed_when: false
       no_log: true
 
@@ -222,7 +234,7 @@
 
     - name: Log out of the registry (no credentials left on the VM)
       ansible.builtin.command:
-        cmd: docker logout {{ acr_login_server }}
+        cmd: docker logout {{ registry_server }}
       changed_when: false
 
     - name: Start or update the container (docker compose up -d)
