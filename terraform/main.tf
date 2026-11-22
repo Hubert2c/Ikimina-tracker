@@ -1,33 +1,38 @@
 # =============================================================================
-# Ikimina Tracker: production environment on Azure
+# Ikimina Tracker: production environment on AWS
 #
-#   Internet --80--> Bastion VM (public subnet, nginx reverse proxy)
+#   Internet --80--> Bastion EC2 (public subnet, nginx reverse proxy + NAT)
 #                       |  SSH (ProxyJump) and HTTP, private network only
 #                       v
-#                    App VM (private subnet, no public IP, Docker)
+#                    App EC2 (private subnet, no public IP, Docker)
 #                       |  5432, TLS, private network only
 #                       v
-#                    Azure Database for PostgreSQL (delegated subnet)
+#                    Amazon RDS for PostgreSQL (database subnets, 2 AZs)
 #
-#   GitHub Actions --push--> Azure Container Registry --pull--> App VM
+#   GitHub Actions --push--> Amazon ECR --pull--> App EC2
 #
-# Files: network.tf (VNet, subnets, NSGs), compute.tf (bastion + app VMs),
-#        database.tf (managed PostgreSQL), registry.tf (ACR),
-#        variables.tf (inputs), outputs.tf (IPs, names, IDs).
+# Outbound internet for the private subnet (apt, Docker, ECR pulls) goes
+# through the bastion, which also acts as a small NAT instance. A managed NAT
+# gateway would cost about USD 32/month; see SECURITY.md (accepted risks).
+#
+# Files: network.tf (VPC, subnets, routes, security groups), compute.tf
+#        (bastion + app EC2), database.tf (RDS PostgreSQL), registry.tf (ECR),
+#        github_oidc.tf (deploy role for GitHub Actions), variables.tf
+#        (inputs), outputs.tf (IPs, names, IDs).
 # =============================================================================
 
-# Short random suffix, so globally unique names (ACR, PostgreSQL) don't clash
-# with anyone else's. It is stored in state, so it stays the same on every apply.
-resource "random_string" "suffix" {
-  length  = 5
-  lower   = true
-  upper   = false
-  numeric = true
-  special = false
+data "aws_availability_zones" "available" {
+  # checkov:skip=CKV_AWS_394:Only the first two zones are used. If AWS ever changes that list, terraform plan shows the subnet move for review before anything is applied.
+  state = "available"
 }
 
-resource "azurerm_resource_group" "main" {
-  name     = var.resource_group_name
-  location = var.location
-  tags     = var.tags
+data "aws_caller_identity" "current" {}
+
+locals {
+  # The app VM and bastion share one AZ; RDS needs subnets in two.
+  primary_az   = data.aws_availability_zones.available.names[0]
+  secondary_az = data.aws_availability_zones.available.names[1]
+
+  # Ubuntu AMIs on AWS create this user and install the key pair for it.
+  admin_username = "ubuntu"
 }

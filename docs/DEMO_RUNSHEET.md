@@ -12,7 +12,7 @@ glance at the commands while recording.
   (https://github.com/Hubert2c/Ikimina-tracker/pull/3).
 
 ## Before you hit record
-- [ ] Azure environment is up (`terraform -chdir=terraform output app_url`)
+- [ ] AWS environment is up (`terraform -chdir=terraform output app_url`)
       and `curl $APP_URL/ready` returns 200.
 - [ ] One full CD run has already succeeded (a fallback if a live run is slow).
 - [ ] A small branch is ready to merge for Prompt 8 (e.g. a README wording
@@ -75,7 +75,8 @@ terraform -chdir=terraform plan      # "No changes" means the live infra matches
 terraform -chdir=terraform output
 ```
 - **Point out:** the private subnet and app VM with no public IP, the bastion,
-  managed PostgreSQL with public access off, ACR, and the 3 NSGs.
+  RDS PostgreSQL with public access off, ECR, the 3 security groups, and
+  the bastion's double role as NAT for the private subnet.
 
 ## Prompt 6: Configuration Management, about 1.5 min
 - Show `ansible/playbook.yml` (2 plays), `inventory/hosts.ini.example`
@@ -83,7 +84,7 @@ terraform -chdir=terraform output
 - **Show a run:** the latest CD run → "Run the Ansible playbook" step
   (PLAY RECAP: `failed=0`).
 - **The task that matters most:** "Log in to the private container registry
-  (ACR)" plus pull plus `docker compose up -d`. Without it the VM can't get
+  (ECR)" plus pull plus `docker compose up -d`. Without it the VM can't get
   the new image. (Or the nginx reverse proxy on the bastion, which is what
   makes it reachable at all.)
 
@@ -93,13 +94,14 @@ terraform -chdir=terraform output
 - **One real finding:** CVE-2026-85091. Show the failed run, the Dockerfile
   fix (`apt-get upgrade`), and the green rerun.
 - Show the `SECURITY.md` findings log and the accepted risks (e.g.
-  `CKV_AZURE_160`, HTTP with no domain yet, and its `checkov:skip` comment).
+  `CKV_AWS_260`, HTTP with no domain yet, and its `checkov:skip` comment).
 
 ## Prompt 8: Full Pipeline and Deployment, about 2 min
 - Merge the prepared PR, then Actions → **CD** opens automatically.
-- **Walk through:** CI checks (7 jobs) → Build, scan and push to ACR → Deploy
-  (Azure OIDC login, temporary NSG rule, Ansible, smoke test, NSG rule removed).
-- While it runs, open the Azure portal: ACR → Repositories →
+- **Walk through:** CI checks (7 jobs) → Build, scan and push to ECR → Deploy
+  (AWS OIDC login, temporary security group rule, Ansible, smoke test, rule
+  removed).
+- While it runs, open the AWS console: ECR → Repositories →
   `ikimina-tracker`. The new SHA tag appears.
 - **When it's green, use the app** (not just `/health`):
 ```bash
@@ -127,8 +129,8 @@ git log --oneline --graph --all | less     # F1 (Oct 23) → F2 (Oct 30) → F3 
 Answer the three questions **in your own words**. Some honest points to think
 about beforehand:
 - **Most important design decision:** for example, keeping the app VM and the
-  database private behind a single bastion. Or OIDC instead of stored Azure
-  keys. Or layering routes / services / storage from F1.
+  database private behind a single bastion. Or OIDC instead of stored AWS
+  access keys. Or layering routes / services / storage from F1.
 - **Weakest part today:** no HTTPS. Single VM (no redundancy or zero-downtime
   deploy). Local Terraform state. Solo reviews.
 - **Fix first before going live:** TLS with a domain, then remote Terraform
