@@ -1,2 +1,18 @@
+# Static inventory. Copy to hosts.ini (ignored by Git) and replace the IPs with
+# the Terraform outputs:
+#   terraform -chdir=terraform output -raw bastion_public_ip
+#   terraform -chdir=terraform output -raw app_private_ip
+
+[bastion]
+ikimina-bastion ansible_host=203.0.113.10
+
 [app_servers]
-ikimina-vm ansible_host=203.0.113.10 ansible_user=ikiminaadmin ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ikimina-app ansible_host=10.20.2.10
+
+[app_servers:vars]
+# The app VM has no public IP: SSH to it through the bastion (ProxyJump).
+ansible_ssh_common_args=-o ProxyJump=ubuntu@203.0.113.10
+
+[all:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
