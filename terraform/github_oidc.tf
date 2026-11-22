@@ -41,7 +41,12 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:environment:production"]
+      # Classic subject, plus the immutable one (owner@id/repo@id) that GitHub
+      # sends when the repository uses immutable subject claims.
+      values = compact([
+        "repo:${var.github_repository}:environment:production",
+        var.github_immutable_repository == "" ? "" : "repo:${var.github_immutable_repository}:environment:production",
+      ])
     }
   }
 }
