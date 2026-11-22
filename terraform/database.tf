@@ -1,22 +1,6 @@
 # ========================================== MANAGED POSTGRESQL DATABASE ====
-# Azure Database for PostgreSQL Flexible Server with private access (VNet
-# integration): it gets a private IP in the delegated subnet and has no public
-# endpoint. Azure handles patching, backups (7 days) and TLS.
-
-# Private DNS zone, so the app resolves the server name to its private IP.
-resource "azurerm_private_dns_zone" "postgres" {
-  name                = "${var.prefix}-${random_string.suffix.result}.private.postgres.database.azure.com"
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
-}
-
-resource "azurerm_private_dns_zone_virtual_network_link" "postgres" {
-  name                  = "${var.prefix}-postgres-dns-link"
-  resource_group_name   = azurerm_resource_group.main.name
-  private_dns_zone_name = azurerm_private_dns_zone.postgres.name
-  virtual_network_id    = azurerm_virtual_network.main.id
-  tags                  = var.tags
-}
+# Amazon RDS for PostgreSQL in the database subnets, with no public endpoint.
+# AWS handles patching, backups and encryption at rest; TLS is enforced.
 
 # Generated admin password: never typed, never in Git. It lives only in the
 # Terraform state (ignored by Git) and the GitHub DATABASE_URL secret.
@@ -26,47 +10,70 @@ resource "random_password" "postgres" {
   special = false
 }
 
-resource "azurerm_postgresql_flexible_server" "main" {
-  # checkov:skip=CKV2_AZURE_57:Private access uses VNet integration (delegated subnet + private DNS zone, public access disabled), which is the other supported private option; Checkov only recognises private endpoints.
-  # checkov:skip=CKV_AZURE_136:Geo-redundant backup doubles backup storage cost; 7-day local backups are enough for this project. See SECURITY.md.
-  name                          = "${var.prefix}-db-${random_string.suffix.result}"
-  resource_group_name           = azurerm_resource_group.main.name
-  location                      = azurerm_resource_group.main.location
-  version                       = var.postgres_version
-  sku_name                      = var.postgres_sku
-  storage_mb                    = 32768
-  backup_retention_days         = 7
-  delegated_subnet_id           = azurerm_subnet.database.id
-  private_dns_zone_id           = azurerm_private_dns_zone.postgres.id
-  public_network_access_enabled = false
-  administrator_login           = var.postgres_admin_login
-  administrator_password        = random_password.postgres.result
-  tags                          = var.tags
+resource "aws_db_subnet_group" "main" {
+  name       = "${var.prefix}-db-subnets"
+  subnet_ids = aws_subnet.database[*].id
+  tags       = { Name = "${var.prefix}-db-subnets" }
+}
 
-  # Azure picks an availability zone; don't try to move it on later applies.
-  lifecycle {
-    ignore_changes = [zone, high_availability]
+# Server settings: require TLS, and log every connection and disconnection
+# (an audit trail for the database).
+resource "aws_db_parameter_group" "main" {
+  name   = "${var.prefix}-postgres${var.postgres_version}"
+  family = "postgres${var.postgres_version}"
+
+  parameter {
+    name  = "rds.force_ssl"
+    value = "1"
   }
 
-  depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
+  parameter {
+    name  = "log_connections"
+    value = "1"
+  }
+
+  parameter {
+    name  = "log_disconnections"
+    value = "1"
+  }
 }
 
-resource "azurerm_postgresql_flexible_server_database" "app" {
-  name      = var.postgres_database
-  server_id = azurerm_postgresql_flexible_server.main.id
-  charset   = "UTF8"
-  collation = "en_US.utf8"
-}
+resource "aws_db_instance" "main" {
+  # checkov:skip=CKV_AWS_157:Multi-AZ doubles the database cost; single-AZ with automated backups is enough for this project. See SECURITY.md.
+  # checkov:skip=CKV_AWS_118:Enhanced monitoring is a paid add-on.
+  # checkov:skip=CKV_AWS_353:Performance Insights is not needed at this scale.
+  # checkov:skip=CKV_AWS_161:The app authenticates with a generated password over TLS; IAM database auth would need AWS credentials on the VM.
+  # checkov:skip=CKV_AWS_293:Deletion protection is off so `terraform destroy` can clean up the student environment and stop costs.
+  # checkov:skip=CKV2_AWS_30:Query logging is off to keep log volume (and cost) low; connections and disconnections are logged.
+  identifier     = "${var.prefix}-db"
+  engine         = "postgres"
+  engine_version = var.postgres_version
+  instance_class = var.db_instance_class
 
-# Log every connection and disconnection (an audit trail for the database).
-resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
-  name      = "log_connections"
-  server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "on"
-}
+  allocated_storage = 20
+  storage_type      = "gp3"
+  storage_encrypted = true
 
-resource "azurerm_postgresql_flexible_server_configuration" "log_disconnections" {
-  name      = "log_disconnections"
-  server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "on"
+  db_name  = var.postgres_database
+  username = var.postgres_admin_login
+  password = random_password.postgres.result
+  port     = 5432
+
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.database.id]
+  parameter_group_name   = aws_db_parameter_group.main.name
+  publicly_accessible    = false
+  multi_az               = false
+
+  backup_retention_period         = var.db_backup_retention_days
+  copy_tags_to_snapshot           = true
+  auto_minor_version_upgrade      = true
+  enabled_cloudwatch_logs_exports = ["postgresql"]
+  apply_immediately               = true
+
+  # Student environment: allow a clean `terraform destroy`.
+  deletion_protection = false
+  skip_final_snapshot = true
+
+  tags = { Name = "${var.prefix}-db" }
 }

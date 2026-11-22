@@ -3,6 +3,30 @@
 How Ikimina Tracker evolved across the course. Format based on
 [Keep a Changelog](https://keepachangelog.com/). Newest first.
 
+## [Summative, AWS] - 2026-11-22 - Moved production from Azure to AWS
+No Azure subscription was available, so the same design was rebuilt on AWS.
+The Azure entries below are kept as history.
+
+### Changed
+- **Terraform** now uses the `aws` provider: VPC with public, private and two
+  database subnets; security groups per tier; bastion and app EC2 (t3.micro,
+  Ubuntu 24.04, IMDSv2, encrypted disks); **Amazon RDS for PostgreSQL** 16
+  (TLS enforced, encrypted, not public); **Amazon ECR** (scan on push,
+  lifecycle policy).
+- The bastion is now also a **NAT instance** for the private subnet (boot
+  script plus a UFW route rule), instead of paying for a NAT gateway.
+- **CD** logs in to AWS with OIDC (`aws-actions/configure-aws-credentials`),
+  pushes to ECR, and opens/closes the temporary SSH rule on the bastion's
+  security group.
+- **Ansible** logs in to ECR (`registry_server`, `registry_token`) instead of
+  ACR; the admin user is now `ubuntu`.
+- `scripts/setup-github-deploy.sh` only sets the GitHub environment; the AWS
+  deploy role is created by Terraform (`github_oidc.tf`).
+
+### Security
+- Findings #17 to #27 in `SECURITY.md` (Checkov AWS checks: fixed, accepted or
+  false positive, each with a reason in the code).
+
 ## [Summative] - 2026-11 - Git-to-production pipeline
 ### Added
 - **Production infrastructure (Terraform)**, split into `network.tf`,
