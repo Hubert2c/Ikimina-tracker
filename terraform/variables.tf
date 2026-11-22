@@ -1,13 +1,7 @@
 # ------------------------------------------------- Environment specifics ----
-variable "location" {
-  description = "Azure region for every resource, e.g. southafricanorth. Azure for Students only allows some regions."
+variable "region" {
+  description = "AWS region for every resource, e.g. eu-west-1. af-south-1 (Cape Town) must be enabled in your account first."
   type        = string
-}
-
-variable "resource_group_name" {
-  description = "Name of the Azure resource group that holds everything."
-  type        = string
-  default     = "ikimina-rg"
 }
 
 variable "prefix" {
@@ -32,8 +26,8 @@ variable "tags" {
 }
 
 # -------------------------------------------------------------- Network ----
-variable "vnet_cidr" {
-  description = "Address space of the virtual network."
+variable "vpc_cidr" {
+  description = "Address range of the VPC."
   type        = string
   default     = "10.20.0.0/16"
 }
@@ -50,14 +44,19 @@ variable "private_subnet_cidr" {
   default     = "10.20.2.0/24"
 }
 
-variable "database_subnet_cidr" {
-  description = "Subnet delegated to Azure Database for PostgreSQL."
-  type        = string
-  default     = "10.20.3.0/24"
+variable "database_subnet_cidrs" {
+  description = "Two database subnets in different availability zones (RDS requires two)."
+  type        = list(string)
+  default     = ["10.20.3.0/24", "10.20.4.0/24"]
+
+  validation {
+    condition     = length(var.database_subnet_cidrs) == 2
+    error_message = "database_subnet_cidrs must contain exactly two CIDR ranges."
+  }
 }
 
 variable "app_private_ip" {
-  description = "Fixed private IP of the app VM (must be inside private_subnet_cidr; Azure reserves .0 to .3)."
+  description = "Fixed private IP of the app VM (must be inside private_subnet_cidr; AWS reserves .0 to .3 and the last address)."
   type        = string
   default     = "10.20.2.10"
 }
@@ -84,40 +83,45 @@ variable "app_port" {
 }
 
 # -------------------------------------------------------------- Compute ----
-variable "admin_username" {
-  description = "Linux admin account on both VMs (SSH keys only, passwords disabled)."
-  type        = string
-  default     = "ikiminaadmin"
-}
-
 variable "ssh_public_key" {
-  description = "OpenSSH public key installed on both VMs."
+  description = "OpenSSH public key installed on both VMs (user: ubuntu)."
   type        = string
 }
 
-variable "bastion_vm_size" {
-  description = "Size of the bastion VM (it only runs SSH and nginx)."
+variable "bastion_instance_type" {
+  description = "EC2 instance type of the bastion (SSH, nginx and NAT only)."
   type        = string
-  default     = "Standard_B1s"
+  default     = "t3.micro"
 }
 
-variable "app_vm_size" {
-  description = "Size of the app VM."
+variable "app_instance_type" {
+  description = "EC2 instance type of the app VM."
   type        = string
-  default     = "Standard_B1s"
+  default     = "t3.micro"
 }
 
 # ------------------------------------------------------------- Database ----
 variable "postgres_version" {
-  description = "PostgreSQL major version."
+  description = "PostgreSQL major version (also selects the parameter group family)."
   type        = string
   default     = "16"
 }
 
-variable "postgres_sku" {
-  description = "Azure Database for PostgreSQL SKU (B_ = Burstable, cheapest)."
+variable "db_instance_class" {
+  description = "RDS instance class (db.t4g.micro and db.t3.micro are free-tier eligible)."
   type        = string
-  default     = "B_Standard_B1ms"
+  default     = "db.t4g.micro"
+}
+
+variable "db_backup_retention_days" {
+  description = "Days of automated RDS backups. Free-tier accounts may be limited to 1; raise to 7 on a paid account."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.db_backup_retention_days >= 1 && var.db_backup_retention_days <= 35
+    error_message = "db_backup_retention_days must be between 1 and 35."
+  }
 }
 
 variable "postgres_admin_login" {
@@ -133,8 +137,26 @@ variable "postgres_database" {
 }
 
 # ------------------------------------------------------------- Registry ----
-variable "acr_sku" {
-  description = "Azure Container Registry SKU."
+variable "image_repository" {
+  description = "Name of the ECR repository for the app image."
   type        = string
-  default     = "Basic"
+  default     = "ikimina-tracker"
+}
+
+# ------------------------------------------------------ GitHub Actions CD ----
+variable "github_repository" {
+  description = "GitHub repository (owner/name) allowed to deploy through OIDC."
+  type        = string
+  default     = "Hubert2c/Ikimina-tracker"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must look like owner/name."
+  }
+}
+
+variable "create_github_oidc_provider" {
+  description = "Create the GitHub OIDC provider in this AWS account. Set false if the account already has one."
+  type        = bool
+  default     = true
 }

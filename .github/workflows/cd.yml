@@ -5,14 +5,15 @@
 #   1. CI checks      - the full CI workflow (lint, tests, Docker build,
 #                       infrastructure validation, pip-audit, Trivy, Checkov)
 #   2. Build & push   - builds the image, scans it with Trivy, pushes it to the
-#                       private Azure Container Registry tagged with the commit SHA
-#   3. Deploy         - logs in to Azure, opens SSH on the bastion for this
+#                       private Amazon ECR repository tagged with the commit SHA
+#   3. Deploy         - logs in to AWS, opens SSH on the bastion for this
 #                       runner's IP only, runs the Ansible playbook through the
 #                       bastion (pull the new image, docker compose up -d), then
 #                       smoke-tests the public URL. The SSH rule is always removed.
 #
-# Azure login uses OpenID Connect (OIDC): GitHub proves who it is to Azure and
-# gets a short-lived token, so no Azure password or key is stored in GitHub.
+# AWS login uses OpenID Connect (OIDC): GitHub proves who it is to AWS and
+# assumes the deploy role (terraform/github_oidc.tf) for short-lived
+# credentials, so no AWS access key is stored in GitHub.
 # One-time setup: scripts/setup-github-deploy.sh (see README, "Deployment").
 # =============================================================================
 
@@ -44,15 +45,15 @@ jobs:
 
   # -------------------------------------------------- 2. BUILD & PUSH ----
   build-push:
-    name: Build, scan and push image to ACR
+    name: Build, scan and push image to ECR
     needs: ci
-    # Skip (instead of failing) until the Azure deployment has been set up.
-    if: ${{ vars.ACR_NAME != '' }}
+    # Skip (instead of failing) until the AWS deployment has been set up.
+    if: ${{ vars.ECR_REGISTRY != '' }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
-      id-token: write # needed for the OIDC login to Azure
+      id-token: write # needed for the OIDC login to AWS
     outputs:
       image: ${{ steps.meta.outputs.image }}
     steps:
@@ -61,23 +62,24 @@ jobs:
 
       - name: Work out the image name
         id: meta
-        run: echo "image=${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+        run: echo "image=${{ vars.ECR_REGISTRY }}/${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to Azure (OIDC)
-        uses: azure/login@v2
+      - name: Log in to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Log in to the container registry
-        run: az acr login --name "${{ vars.ACR_NAME }}"
+      - name: Log in to the container registry (ECR)
+        run: |
+          aws ecr get-login-password \
+            | docker login --username AWS --password-stdin "${{ vars.ECR_REGISTRY }}"
 
       - name: Build the image
         run: |
           docker build \
             --tag "${{ steps.meta.outputs.image }}" \
-            --tag "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPOSITORY}:latest" \
+            --tag "${{ vars.ECR_REGISTRY }}/${IMAGE_REPOSITORY}:latest" \
             .
 
       - name: Scan the exact image being shipped (Trivy)
@@ -91,10 +93,14 @@ jobs:
             --ignorefile /.trivyignore --exit-code 1 --no-progress \
             "${{ steps.meta.outputs.image }}"
 
-      - name: Push the image to ACR
+      - name: Push the image to ECR
         run: |
           docker push "${{ steps.meta.outputs.image }}"
-          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPOSITORY}:latest"
+          docker push "${{ vars.ECR_REGISTRY }}/${IMAGE_REPOSITORY}:latest"
+
+      - name: Log out of the registry
+        if: always()
+        run: docker logout "${{ vars.ECR_REGISTRY }}"
 
   # -------------------------------------------------------- 3. DEPLOY ----
   deploy:
@@ -107,18 +113,15 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      NSG_RULE: Allow-SSH-CD-Runner
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Log in to Azure (OIDC)
-        uses: azure/login@v2
+      - name: Log in to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Find this runner's public IP
         id: runner
@@ -126,14 +129,10 @@ jobs:
 
       - name: Open SSH on the bastion for this runner only (temporary)
         run: |
-          az network nsg rule create \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" \
-            --nsg-name "${{ vars.BASTION_NSG }}" \
-            --name "$NSG_RULE" \
-            --priority 120 --direction Inbound --access Allow --protocol Tcp \
-            --source-address-prefixes "${{ steps.runner.outputs.ip }}/32" \
-            --destination-port-ranges 22 \
-            --output none
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${{ vars.BASTION_SG_ID }}" \
+            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${{ steps.runner.outputs.ip }}/32,Description=CD runner (temporary)}]" \
+            --output text > /dev/null
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -193,13 +192,13 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          # Short-lived (~3 h) pull token for the VM; never printed.
-          ACR_TOKEN=$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --query accessToken --output tsv)
-          echo "::add-mask::$ACR_TOKEN"
+          # Short-lived (12 h) ECR pull token for the VM; never printed.
+          REGISTRY_TOKEN=$(aws ecr get-login-password)
+          echo "::add-mask::$REGISTRY_TOKEN"
           umask 077
           jq -n \
-            --arg acr_login_server "${{ vars.ACR_LOGIN_SERVER }}" \
-            --arg acr_token "$ACR_TOKEN" \
+            --arg registry_server "${{ vars.ECR_REGISTRY }}" \
+            --arg registry_token "$REGISTRY_TOKEN" \
             --arg image_tag "$GITHUB_SHA" \
             --arg database_url "$DATABASE_URL" \
             '$ARGS.named' > "$RUNNER_TEMP/deploy-vars.json"
@@ -225,11 +224,11 @@ jobs:
       - name: Close SSH on the bastion again
         if: always()
         run: |
-          az network nsg rule delete \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" \
-            --nsg-name "${{ vars.BASTION_NSG }}" \
-            --name "$NSG_RULE" \
-            --output none || true
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${{ vars.BASTION_SG_ID }}" \
+            --protocol tcp --port 22 \
+            --cidr "${{ steps.runner.outputs.ip }}/32" \
+            --output text > /dev/null || true
 
       - name: Remove the SSH key and deployment variables
         if: always()

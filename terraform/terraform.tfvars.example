@@ -1,12 +1,13 @@
 # Copy to terraform.tfvars (ignored by Git) and fill in your own values.
-location       = "southafricanorth" # must be a region your subscription allows
+region         = "eu-west-1"        # any region your account allows
 admin_cidr     = "198.51.100.10/32" # your public IP: curl ifconfig.me, then add /32
 ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 
 # Optional overrides (defaults shown)
-# resource_group_name = "ikimina-rg"
-# prefix              = "ikimina"
-# bastion_vm_size     = "Standard_B1s"
-# app_vm_size         = "Standard_B1s"
-# postgres_sku        = "B_Standard_B1ms"
-# acr_sku             = "Basic"
+# prefix                      = "ikimina"
+# bastion_instance_type       = "t3.micro"
+# app_instance_type           = "t3.micro"
+# db_instance_class           = "db.t4g.micro"
+# db_backup_retention_days    = 1        # free tier; 7 on a paid account
+# github_repository           = "Hubert2c/Ikimina-tracker"
+# create_github_oidc_provider = true     # false if your account already has one

@@ -2,9 +2,9 @@ terraform {
   required_version = ">= 1.6.0"
 
   required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.80"
     }
     random = {
       source  = "hashicorp/random"
@@ -13,6 +13,13 @@ terraform {
   }
 }
 
-provider "azurerm" {
-  features {}
+# Credentials come from the AWS CLI (`aws configure` or `aws sso login`) or
+# the AWS_* environment variables; nothing is stored in this repository.
+provider "aws" {
+  region = var.region
+
+  # Tags applied to every resource that supports them.
+  default_tags {
+    tags = var.tags
+  }
 }
