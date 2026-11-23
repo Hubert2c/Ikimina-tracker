@@ -25,6 +25,28 @@ def _not_found(err):
     return jsonify(error=str(err)), 404
 
 
+@bp.get("/")
+def index():
+    """Landing response for the bare URL, so opening the live link shows what
+    the API is and where to go, instead of a 404."""
+    return jsonify(
+        name="Ikimina Tracker",
+        description="Record-keeping API for community savings groups",
+        status="ok",
+        endpoints={
+            "GET /health": "liveness",
+            "GET /ready": "readiness (database reachable)",
+            "GET /version": "deployed build (commit SHA)",
+            "GET /groups": "list groups",
+            "POST /groups": "create a group {name}",
+            "GET /groups/<id>": "group summary with balances",
+            "POST /groups/<id>/members": "add a member {member}",
+            "POST /groups/<id>/contributions": "record a contribution {member, amount}",
+            "GET /groups/<id>/members/<member>/balance": "one member's balance",
+        },
+    )
+
+
 @bp.get("/health")
 def health():
     """Liveness: the process is up and answering. Never touches the database,
