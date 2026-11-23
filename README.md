@@ -111,7 +111,7 @@ TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/ikimina_test pytest -v
 
 ## Continuous Integration
 `.github/workflows/ci.yml` runs on every push to any branch except `main`,
-and on every pull request into `main`:
+and on every pull request:
 
 | Job | What it does | Fails when |
 |-----|--------------|-----------|
@@ -119,43 +119,31 @@ and on every pull request into `main`:
 | **Test (pytest)** | Runs all tests on the in-memory store *and* a real PostgreSQL service | any test fails |
 | **Docker build** | Builds the image, starts the full compose stack, calls `/health`, writes and reads a group | the build fails or the stack doesn't work |
 | **Infrastructure validation** | Checks Terraform formatting and configuration, and Ansible playbook syntax | any validation fails |
+| **Security scan (dependencies)** | pip-audit checks every pinned Python package for known CVEs | any known vulnerability |
+| **Security scan (container image + secrets)** | Trivy scans the built image and the repo for committed secrets | a fixable HIGH/CRITICAL CVE or any secret |
+| **Security scan (IaC)** | Checkov scans Terraform, Ansible, the Dockerfile and workflows | any failed (non-skipped) check |
 
 `Docker build` only runs after lint and tests pass. Branch protection on `main`
-requires all four checks, so a pull request cannot be merged while CI is red.
+requires all of these checks, so a pull request cannot be merged while CI is red.
 
 ### Azure VM deployment
-Terraform provisions an Ubuntu 24.04 VM, static public IP, virtual network,
-and network security rules. SSH is restricted to the administrator CIDR you
-provide; the API port (5000 by default) is public. Provisioning and application
-deployment are separate steps:
+Terraform provisions the infrastructure on Azure: a virtual network, a subnet,
+a network security group, and an Ubuntu 24.04 VM with a static public IP. It is
+split into `network` and `compute` modules. Ansible then hardens the VM and
+deploys the containerized app, using the roles `common`, `security`, `docker`
+and `app`.
 
-1. Install Terraform, Azure CLI, Ansible, and Docker locally; sign in using
-   `az login`, select the intended Azure subscription, and set
-   `ARM_SUBSCRIPTION_ID` to its ID (`az account show --query id -o tsv`).
-2. In `terraform/`, create a local `terraform.tfvars` with `location`,
-   `ssh_public_key`, and `admin_cidr` (your public IP as `/32`), for example:
-   `location = "westeurope"`, `ssh_public_key = "ssh-ed25519 AAAA..."`, and
-   `admin_cidr = "198.51.100.10/32"`. This file is ignored by Git. Run
-   `terraform init`, `terraform plan`, and
-   `terraform apply`. Azure resources incur charges; review the plan first.
-3. Copy `ansible/inventory/hosts.ini.example` to
-   `ansible/inventory/hosts.ini`, replace its example IP with the Terraform
-   `public_ip` output, and set the correct SSH key path. Copy
-   `ansible/group_vars/all.yml.example` to `ansible/group_vars/all.yml` and
-   set `ssh_admin_cidr` to your public IP in `/32` notation.
-4. Create the directory `ansible/group_vars/all/` and create
-   `ansible/group_vars/all/vault.yml` with
-   `vault_postgres_password: "<a unique password of at least 32 characters>"`
-   then encrypt it with `ansible-vault encrypt ansible/group_vars/all/vault.yml`.
-   The file is ignored by Git.
-5. From the repository root, install the collection and deploy:
-   `ansible-galaxy collection install -r ansible/requirements.yml`, then
-   `ansible-playbook -i ansible/inventory/hosts.ini ansible/playbook.yml
-   --ask-vault-pass`.
+1. **Provision:** follow [terraform/README.md](terraform/README.md)
+   (`az login`, copy `terraform.tfvars.example`, `terraform init`, `plan`, `apply`).
+2. **Configure and deploy:** follow [ansible/README.md](ansible/README.md)
+   (static or Azure dynamic inventory, Vault-encrypted DB password,
+   `ansible-playbook playbook.yml --ask-vault-pass`).
 
-The VM's UFW firewall and Azure network security group both limit SSH and API
-traffic. The application is served on port 5000 without TLS; place it behind a
-TLS-terminating reverse proxy before using it with real financial records.
+SSH is limited to your admin CIDR by both the Azure NSG and UFW, and the server
+is hardened with key-only SSH, fail2ban and sysctl settings. The app is served
+on port 5000 without TLS (an accepted risk, see [SECURITY.md](SECURITY.md));
+put it behind a TLS-terminating reverse proxy before storing real financial
+records.
 
 ### Example usage
 ```bash

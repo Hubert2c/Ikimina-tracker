@@ -1,0 +1,10 @@
+# Checkov configuration, used by the "Security scan (IaC)" CI job.
+# Every skipped check is an accepted risk explained in SECURITY.md.
+compact: true
+quiet: true
+skip-path:
+  - venv
+  - terraform/.terraform   # downloaded providers (only exists after a local terraform init)
+# Checks are skipped inline, next to the resource they apply to
+# (e.g. "checkov:skip=CKV_AZURE_119:<reason>"), so each exception is visible
+# where it matters. Every skip is listed under "Accepted risks" in SECURITY.md.

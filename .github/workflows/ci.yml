@@ -5,6 +5,13 @@
 #   2. test          - pytest, in-memory AND PostgreSQL (fails if a test fails)
 #   3. docker-build  - builds the image and smoke-tests the full compose stack
 #   4. infrastructure - Terraform and Ansible validation
+#   5. security scans (DevSecOps), each fails the pipeline on a finding:
+#        - dependency-scan - pip-audit: known CVEs in Python packages
+#        - image-scan      - Trivy: HIGH/CRITICAL CVEs in the Docker image,
+#                            plus secrets accidentally committed to the repo
+#        - iac-scan        - Checkov: misconfigurations in Terraform,
+#                            Ansible, the Dockerfile and this workflow
+#      Findings and accepted risks are documented in SECURITY.md.
 # docker-build only starts if lint and test both passed. If ANY step exits
 # with an error, the job turns red and the pull request cannot be merged
 # (branch protection requires these checks).
@@ -16,9 +23,7 @@ on:
   push:
     branches-ignore:
       - main          # main only changes through reviewed, already-tested PRs
-  pull_request:
-    branches:
-      - main
+  pull_request:       # every pull request, whatever branch it targets
 
 # If you push again while a run is still going, cancel the older run
 concurrency:
@@ -172,3 +177,105 @@ jobs:
 
       - name: Check Ansible playbook syntax
         run: ansible-playbook --syntax-check -i ansible/inventory/hosts.ini.example ansible/playbook.yml
+
+  # ===================================================== DEVSECOPS ====
+  # ------------------------------------------- DEPENDENCY SCANNING ----
+  dependency-scan:
+    name: Security scan (dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      - name: Scan Python dependencies for known vulnerabilities
+        # Checks every pinned package (and its dependencies) against the
+        # Python Packaging Advisory Database and OSV. Any known
+        # vulnerability, of any severity, fails the pipeline.
+        run: pip-audit --requirement requirements-dev.txt --strict --desc
+
+  # ------------------------------------- CONTAINER IMAGE SCANNING ----
+  image-scan:
+    name: Security scan (container image + secrets)
+    runs-on: ubuntu-latest
+    env:
+      # Official Trivy image pinned to an exact release, run directly
+      # instead of through a third-party action wrapper.
+      TRIVY_IMAGE: aquasec/trivy:0.58.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build --tag ikimina-tracker:scan .
+
+      - name: Scan image with Trivy (HIGH/CRITICAL, fixable)
+        # Scans OS packages (Debian) and Python packages inside the image.
+        # Fails on HIGH or CRITICAL vulnerabilities that have a fix available;
+        # CVEs with no fix yet cannot be acted on (see SECURITY.md).
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v "$PWD/.trivyignore:/.trivyignore:ro"
+          "$TRIVY_IMAGE" image
+          --scanners vuln
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --ignorefile /.trivyignore
+          --exit-code 1
+          --no-progress
+          ikimina-tracker:scan
+
+      - name: Report MEDIUM/LOW image findings (informational)
+        # Shown in the log for triage, but does not fail the pipeline.
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          "$TRIVY_IMAGE" image
+          --scanners vuln
+          --severity MEDIUM,LOW
+          --ignore-unfixed
+          --exit-code 0
+          --no-progress
+          ikimina-tracker:scan
+
+      - name: Scan repository for committed secrets
+        # API keys, private keys, passwords etc. in any tracked file.
+        run: >-
+          docker run --rm
+          -v "$PWD:/src:ro"
+          "$TRIVY_IMAGE" fs
+          --scanners secret
+          --exit-code 1
+          --no-progress
+          /src
+
+  # ------------------------------------------------- IaC SCANNING ----
+  iac-scan:
+    name: Security scan (IaC)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Checkov
+        run: pip install checkov==3.4.6
+
+      - name: Scan Terraform, Ansible, Dockerfile and workflows with Checkov
+        # Settings and documented skips live in .checkov.yaml.
+        # Any failed check fails the pipeline.
+        run: >-
+          checkov --directory . --config-file .checkov.yaml
+          --framework terraform ansible dockerfile github_actions
