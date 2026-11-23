@@ -7,6 +7,14 @@ def setup_group(c):
     c.post("/groups/1/members", json={"member": "Jean"})
 
 
+def test_index_lists_endpoints(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["name"] == "Ikimina Tracker"
+    assert "GET /health" in body["endpoints"]
+
+
 def test_health(client):
     assert client.get("/health").get_json() == {"status": "ok"}
 
