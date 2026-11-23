@@ -92,6 +92,7 @@ Each finding records what was found, how it was found, its severity, and what wa
 | 12 | 2026-11-23 | Playbook review | `docker compose up` task decided "changed" by reading only stdout, but Compose writes progress to **stderr**. Redeployments were reported as "ok", hiding changes from the run log / audit trail. | Low | **Fixed:** checks stdout + stderr; `--build` only when code/config changed (idempotent re-runs). |
 | 13 | 2026-11-23 | Playbook review | A failed deployment ended with a bare timeout and no diagnostics. | Low | **Fixed:** `block`/`rescue` prints `docker compose ps` and logs, then fails clearly. |
 | 14 | 2026-11-23 | Checkov `CKV_AZURE_119` | The VM's network interface has a public IP. | Low | **Accepted** (see *Accepted risks*); skipped inline on that one resource with the reason. |
+| 15 | 2026-11-23 | Trivy (CI image scan) | `zlib1g` 1:1.3.dfsg+really1.3.1-1+b1 in the `python:3.12-slim` base image: **CVE-2026-85091**, heap buffer overflow in `gz_vacate()` allowing arbitrary code execution. Debian had published a fix (`…-1+deb13u1`), but the official base image had not been rebuilt yet. | High | **Fixed:** the Dockerfile now runs `apt-get upgrade` during the build, so published Debian security fixes are applied even before the base image is rebuilt. Trivy re-run: 0 HIGH/CRITICAL. |
 
 ### Automated scan results
 Checkov 3.4.6 (same config as CI), before and after the infrastructure changes:
@@ -100,12 +101,13 @@ Checkov 3.4.6 (same config as CI), before and after the infrastructure changes:
 |-----------|------------------|-------------|
 | Terraform | 12 passed, **3 failed** (`CKV_AZURE_50`, `CKV_AZURE_119`, `CKV2_AZURE_31`) | 14 passed, **0 failed**, 1 skipped (`CKV_AZURE_119`, accepted) |
 | Ansible | 3 passed, 0 failed | 8 passed, 0 failed |
-| Dockerfile | 48 passed, 0 failed | 48 passed, 0 failed |
+| Dockerfile | 48 passed, 0 failed | 65 passed, 0 failed |
 | GitHub Actions | 108 passed, 0 failed | 172 passed, 0 failed |
 
 pip-audit 2.10.1: no known vulnerabilities (finding #5).
-Trivy (image + secrets) runs in CI. Its results are in the "Security scan
-(container image + secrets)" job log of each run.
+Trivy 0.58.1 (CI): the first run on this branch found 1 HIGH (`CVE-2026-85091`,
+zlib1g, finding #15) and failed the pipeline as intended. After the fix:
+0 HIGH/CRITICAL; secret scan: 0 secrets.
 
 ## Accepted risks
 Each accepted risk is a decision not to fix something now, with the reason.

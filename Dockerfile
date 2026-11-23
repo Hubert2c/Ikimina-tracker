@@ -19,6 +19,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# 2b. Apply Debian security updates published since the base image was built.
+#     Official images are rebuilt only periodically, so a fixed CVE can stay
+#     in the base image for days (see SECURITY.md finding #15, zlib1g).
+#     Removing the apt lists afterwards keeps the image small.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # 3. All following commands run inside /app (created automatically).
 WORKDIR /app
 
