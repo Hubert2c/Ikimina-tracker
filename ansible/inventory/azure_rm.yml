@@ -1,0 +1,30 @@
+---
+# Dynamic inventory: asks Azure which VMs exist instead of hard-coding IPs.
+# Every VM tagged application=ikimina-tracker (Terraform adds this tag) is
+# put in the "app_servers" group.
+#
+# Requires: az login, ansible-galaxy collection install -r requirements.yml,
+#           pip install -r ~/.ansible/collections/ansible_collections/azure/azcollection/requirements.txt
+# Preview:  ansible-inventory -i inventory/azure_rm.yml --graph
+plugin: azure.azcollection.azure_rm
+auth_source: cli
+
+# Only look in the resource groups Terraform creates (one per environment).
+include_vm_resource_groups:
+  - ikimina-dev-rg
+  - ikimina-staging-rg
+  - ikimina-prod-rg
+
+plain_host_names: true
+
+conditional_groups:
+  app_servers: "tags.application | default('') == 'ikimina-tracker'"
+
+keyed_groups:
+  # Also groups hosts by environment tag, e.g. "env_dev", "env_prod".
+  - prefix: env
+    key: tags.environment | default('none')
+
+hostvar_expressions:
+  ansible_host: public_ipv4_addresses | first
+  ansible_user: "'ikiminaadmin'"

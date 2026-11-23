@@ -1,0 +1,11 @@
+---
+- name: Install the SSH hardening drop-in
+  ansible.builtin.template:
+    src: sshd-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-ikimina-hardening.conf
+    owner: root
+    group: root
+    mode: "0600"
+    # sshd checks the file before it is installed, so a typo cannot lock us out.
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart SSH

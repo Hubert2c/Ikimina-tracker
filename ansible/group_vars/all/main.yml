@@ -1,0 +1,16 @@
+---
+# Shared, non-secret settings. Secrets live in vault.yml (see vault.yml.example).
+
+# Your public IP with /32 - the only address allowed to SSH in.
+# Must match admin_cidr in terraform.tfvars. Override with -e ssh_admin_cidr=...
+ssh_admin_cidr: "198.51.100.10/32"
+
+# API port; must match app_port in terraform.tfvars.
+app_port: 5000
+
+# Who may reach the API through the host firewall (UFW).
+app_allowed_cidrs:
+  - "0.0.0.0/0"
+
+# Git revision of the application to deploy.
+app_revision: f3

@@ -1,0 +1,13 @@
+---
+app_repository: "https://github.com/Hubert2c/Ikimina-tracker.git"
+app_revision: f3
+app_directory: /opt/ikimina-tracker
+app_port: 5000
+
+postgres_user: ikimina
+postgres_database: ikimina
+# vault_postgres_password comes from group_vars/all/vault.yml (Ansible Vault)
+
+app_health_retries: 12
+app_health_delay: 5
+app_compose_wait_timeout: 180

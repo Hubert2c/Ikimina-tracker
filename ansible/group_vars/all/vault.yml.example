@@ -1,0 +1,6 @@
+---
+# Copy to vault.yml (git-ignored) and encrypt it:
+#   cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+#   ansible-vault encrypt group_vars/all/vault.yml
+# Generate a password with: openssl rand -base64 48
+vault_postgres_password: "replace-with-at-least-32-random-characters"

@@ -1,0 +1,21 @@
+---
+# Required from group_vars: ssh_admin_cidr, app_port, app_allowed_cidrs
+
+# fail2ban: ban an IP for 1 hour after 5 failed SSH logins within 10 minutes.
+security_fail2ban_maxretry: 5
+security_fail2ban_findtime: 10m
+security_fail2ban_bantime: 1h
+
+# Kernel network hardening. net.ipv4.ip_forward is deliberately NOT changed:
+# Docker needs it to route traffic to containers.
+security_sysctl_settings:
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.default.accept_source_route: 0
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+  net.ipv4.tcp_syncookies: 1
+  net.ipv6.conf.all.accept_redirects: 0
+  kernel.dmesg_restrict: 1

@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[sshd]
+enabled  = true
+maxretry = {{ security_fail2ban_maxretry }}
+findtime = {{ security_fail2ban_findtime }}
+bantime  = {{ security_fail2ban_bantime }}
+# Never ban the administrator's own network.
+ignoreip = 127.0.0.1/8 ::1 {{ ssh_admin_cidr }}

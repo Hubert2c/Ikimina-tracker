@@ -1,0 +1,37 @@
+---
+- name: Refuse to open SSH to the whole internet
+  ansible.builtin.assert:
+    that:
+      - ssh_admin_cidr is defined
+      - ssh_admin_cidr is search('^[0-9a-fA-F:.]+/[0-9]{1,3}$')
+      - ssh_admin_cidr not in ['0.0.0.0/0', '::/0']
+    fail_msg: "Set ssh_admin_cidr to your own IP with /32 (e.g. 198.51.100.10/32), not 0.0.0.0/0."
+    quiet: true
+
+- name: Install security packages
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+
+- name: Configure the host firewall
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Harden the SSH server
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Configure fail2ban
+  ansible.builtin.import_tasks: fail2ban.yml
+
+- name: Apply kernel network hardening
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-ikimina-hardening.conf
+    sysctl_set: true
+    reload: true
+    state: present
+  loop: "{{ security_sysctl_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}={{ item.value }}"

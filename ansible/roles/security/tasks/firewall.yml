@@ -1,0 +1,36 @@
+---
+# SSH is allowed BEFORE the firewall is enabled, so we never lock ourselves out.
+- name: Allow SSH from the admin CIDR only (rate-limited)
+  community.general.ufw:
+    rule: limit
+    port: "22"
+    proto: tcp
+    src: "{{ ssh_admin_cidr }}"
+    comment: ssh-admin
+
+- name: Allow the API port
+  community.general.ufw:
+    rule: allow
+    port: "{{ app_port | string }}"
+    proto: tcp
+    src: "{{ 'any' if item in ['0.0.0.0/0', '::/0'] else item }}"
+    comment: ikimina-api
+  loop: "{{ app_allowed_cidrs }}"
+
+- name: Deny all other inbound traffic by default
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Allow outbound traffic (package updates, image pulls)
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Log blocked connections
+  community.general.ufw:
+    logging: "low"
+
+- name: Enable the firewall
+  community.general.ufw:
+    state: enabled

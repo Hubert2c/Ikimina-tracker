@@ -1,0 +1,76 @@
+---
+- name: Require a strong database password from Ansible Vault
+  ansible.builtin.assert:
+    that:
+      - vault_postgres_password is defined
+      - vault_postgres_password | length >= 32
+    fail_msg: Set vault_postgres_password (at least 32 characters) in group_vars/all/vault.yml and encrypt it with ansible-vault.
+    quiet: true
+
+- name: Check out the application
+  ansible.builtin.git:
+    repo: "{{ app_repository }}"
+    dest: "{{ app_directory }}"
+    version: "{{ app_revision }}"
+    force: true
+  register: app_checkout
+
+- name: Write the production environment file
+  ansible.builtin.template:
+    src: app.env.j2
+    dest: "{{ app_directory }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  register: app_env
+  no_log: true
+
+- name: Deploy the stack and verify it is healthy
+  block:
+    # Only rebuild the image when the code or configuration changed, so a
+    # re-run with nothing new reports "ok" instead of "changed".
+    - name: Start the application stack
+      ansible.builtin.command:
+        cmd: >-
+          docker compose up --detach --wait --remove-orphans
+          --wait-timeout {{ app_compose_wait_timeout }}
+          {{ '--build' if (app_checkout.changed or app_env.changed) else '' }}
+        chdir: "{{ app_directory }}"
+      register: app_compose_up
+      changed_when: (app_compose_up.stdout ~ app_compose_up.stderr) is search('Created|Recreated|Started|Built')
+
+    - name: Wait for the API health check
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/health"
+        status_code: 200
+      register: app_health
+      retries: "{{ app_health_retries }}"
+      delay: "{{ app_health_delay }}"
+      until: app_health.status == 200
+
+  rescue:
+    - name: Collect container status for troubleshooting
+      ansible.builtin.command:
+        cmd: docker compose ps --all
+        chdir: "{{ app_directory }}"
+      register: app_ps
+      changed_when: false
+      failed_when: false
+
+    - name: Collect recent container logs for troubleshooting
+      ansible.builtin.command:
+        cmd: docker compose logs --no-color --tail 50
+        chdir: "{{ app_directory }}"
+      register: app_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Show diagnostics
+      ansible.builtin.debug:
+        msg:
+          - "{{ app_ps.stdout_lines | default([]) }}"
+          - "{{ app_logs.stdout_lines | default([]) }}"
+
+    - name: Stop the play with a clear error
+      ansible.builtin.fail:
+        msg: "Deployment of {{ app_revision }} failed health checks on {{ inventory_hostname }}. See the diagnostics above."

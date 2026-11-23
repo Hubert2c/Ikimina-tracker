@@ -1,0 +1,11 @@
+---
+docker_daemon_config:
+  # Containers cannot gain extra privileges through setuid binaries.
+  no-new-privileges: true
+  # Containers keep running while the Docker daemon restarts / upgrades.
+  live-restore: true
+  # Stop container logs from filling the disk.
+  log-driver: json-file
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
