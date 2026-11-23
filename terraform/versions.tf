@@ -9,6 +9,8 @@ terraform {
   }
 }
 
+# Credentials are never written here. Sign in with `az login` and export
+# ARM_SUBSCRIPTION_ID (see README.md).
 provider "azurerm" {
   features {}
 }

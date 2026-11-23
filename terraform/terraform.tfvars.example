@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars (git-ignored) and fill in your own values:
+#   cp terraform.tfvars.example terraform.tfvars
+
+environment = "dev"
+location    = "southafricanorth"
+
+# Your public IP with /32. Find it with: curl -s https://ifconfig.me
+admin_cidr = "198.51.100.10/32"
+
+# Contents of your public key, e.g. ~/.ssh/id_ed25519.pub
+ssh_public_key = "ssh-ed25519 AAAA...replace-me... you@laptop"
+
+# Optional overrides (defaults shown)
+# vm_size               = "Standard_B2s"
+# app_port              = 5000
+# app_allowed_cidrs     = ["0.0.0.0/0"]
+# vnet_address_space    = ["10.20.0.0/16"]
+# subnet_address_prefix = "10.20.1.0/24"
+# tags                  = { owner = "your-name" }
